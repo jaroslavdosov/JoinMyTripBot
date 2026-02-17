@@ -7,8 +7,23 @@ import org.springframework.transaction.annotation.Transactional
 class UserService(private val userRepository: UserRepository) {
 
     @Transactional
-    fun createNewUser(userName: String, userSex: String, userAge: Int): User {
-        val newUser = User(name = userName, sex = userSex, age = userAge)
+    fun createNewUser(
+        name: String,
+        gender: String,
+        description: String,
+        userName: String,
+        age: Int,
+        lastNotifiedAt: java.time.LocalDateTime,
+        isActive: Boolean ): User {
+
+        val newUser = User(
+            name = name,
+            gender = gender,
+            description = description,
+            userName = userName,
+            age = age,
+            lastNotifiedAt = lastNotifiedAt,
+            isActive = isActive)
         return userRepository.save(newUser)
     }
 }

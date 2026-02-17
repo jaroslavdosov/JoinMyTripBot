@@ -21,13 +21,20 @@ class TelegramBot(
             val messageText = update.message.text
             val chatId = update.message.chatId
             val firstName = update.message.from.firstName
+            val userName = update.message.from.userName
+
+
 
 
             // Создаем объект пользователя для БД
             val userToSave = User(
-                name = firstName+"test22222",
-                sex = messageText,
-                age = 123
+                name = firstName + " name",
+                gender = "MALE",
+                description = messageText + "description",
+                userName = userName,
+                age = 24,
+                lastNotifiedAt = java.time.LocalDateTime.now(),
+                isActive = true
             )
 
             try {
