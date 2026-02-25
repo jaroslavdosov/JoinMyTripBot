@@ -1,4 +1,4 @@
-package org.example.db
+package org.example.bot
 
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration

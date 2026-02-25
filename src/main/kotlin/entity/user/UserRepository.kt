@@ -1,4 +1,4 @@
-package org.example.db
+package org.example.entity.user
 
 import org.springframework.data.repository.CrudRepository
 import org.springframework.stereotype.Repository
