@@ -8,13 +8,15 @@ class UserService(private val userRepository: UserRepository) {
 
     @Transactional
     fun createNewUser(
+        id: Long,
         name: String,
         gender: String,
         description: String,
         userName: String,
         age: Int,
         lastNotifiedAt: java.time.LocalDateTime,
-        isActive: Boolean ): User {
+        isActive: Boolean,
+        state: String): User {
 
         val newUser = User(
             name = name,
@@ -23,7 +25,9 @@ class UserService(private val userRepository: UserRepository) {
             userName = userName,
             age = age,
             lastNotifiedAt = lastNotifiedAt,
-            isActive = isActive)
+            isActive = isActive,
+            state = state,
+            id = id)
         return userRepository.save(newUser)
     }
 }
