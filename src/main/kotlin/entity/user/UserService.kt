@@ -1,4 +1,4 @@
-package org.example.db
+package org.example.entity.user
 
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional

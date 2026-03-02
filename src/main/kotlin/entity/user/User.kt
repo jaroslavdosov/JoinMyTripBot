@@ -1,5 +1,6 @@
-package org.example.db
+package org.example.entity.user
 import jakarta.persistence.*
+import org.example.entity.trip.Trip
 
 @Entity
 @Table(name = "users")
@@ -19,5 +20,10 @@ class User(
     @Column(name = "last_notified_at")
     var lastNotifiedAt: java.time.LocalDateTime = java.time.LocalDateTime.now(),
 
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+
+    @OneToMany(mappedBy = "user", cascade = [CascadeType.ALL], orphanRemoval = true, fetch = FetchType.EAGER)
+    var trips: MutableList<Trip> = mutableListOf(),
+
+    var tempDestination: String? = null
 )

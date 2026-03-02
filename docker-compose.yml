@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:15
+    image: postgres:16.11
     container_name: postgres_db
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -11,7 +11,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-        - pgdata:/var/lib/postgresql/data
+      - ./countries.sql:/docker-entrypoint-initdb.d/01-countries.sql
+      - ./cities.sql:/docker-entrypoint-initdb.d/02-cities.sql
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
