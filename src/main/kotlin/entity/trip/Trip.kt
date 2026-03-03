@@ -1,24 +1,31 @@
 package org.example.entity.trip
 
 import jakarta.persistence.*
+import org.example.entity.city.City
+import org.example.entity.country.Country
 import org.example.entity.user.User
+import java.time.LocalDate
 
 @Entity
 @Table(name = "trips")
 class Trip(
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null,
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id")
-    val user: User,
+    @ManyToOne @JoinColumn(name = "user_id")
+    var user: User? = null,
 
-    var destination: String,
+    @ManyToOne @JoinColumn(name = "city_id")
+    var city: City? = null,
 
-    @Column(name = "travel_start")
-    var travelStart: java.time.LocalDate,
+    @ManyToOne @JoinColumn(name = "country_id")
+    var country: Country? = null,
 
-    @Column(name = "travel_end")
-    var travelEnd: java.time.LocalDate
+    var isCountryWide: Boolean = false, // true если едем в страну целиком
+
+    var travelStart: LocalDate? = null,
+    var travelEnd: LocalDate? = null,
+
+    // Оставляем текстовое поле для быстрого отображения (опционально)
+    var destinationName: String? = null
 )

@@ -364,7 +364,7 @@ CREATE INDEX countries_region_id_idx ON public.countries USING btree (region_id)
 CREATE INDEX countries_subregion_id_idx ON public.countries USING btree (subregion_id);
 
 
-
+ALTER TABLE ONLY public.countries ADD CONSTRAINT countries_pkey PRIMARY KEY (id);
 --
 -- PostgreSQL database dump complete
 --

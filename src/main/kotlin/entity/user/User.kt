@@ -25,5 +25,13 @@ class User(
     @OneToMany(mappedBy = "user", cascade = [CascadeType.ALL], orphanRemoval = true, fetch = FetchType.EAGER)
     var trips: MutableList<Trip> = mutableListOf(),
 
-    var tempDestination: String? = null
+    var tempDestination: String? = null,
+
+    @Column(name = "temp_city_id")
+    var tempCityId: Long? = null,
+
+    @Column(name = "temp_country_id")
+    var tempCountryId: Long? = null,
+
+    var languageCode: String = "ru"
 )
