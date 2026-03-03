@@ -10,9 +10,10 @@ import org.springframework.data.domain.Pageable
 interface CityRepository : JpaRepository<City, Long> {
 
     @Query("""
-        SELECT c FROM City c 
-        WHERE c.name ILIKE CONCAT(:q, '%') 
-        OR c.translations ILIKE CONCAT('%', :q, '%')
-    """)
+    SELECT c FROM City c 
+    WHERE (c.name ILIKE CONCAT(:q, '%') 
+    OR c.translations ILIKE CONCAT('%', :q, '%'))
+    ORDER BY c.population DESC
+""")
     fun searchCities(@Param("q") q: String): List<City>
 }

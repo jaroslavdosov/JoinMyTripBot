@@ -222,7 +222,7 @@ class TelegramBot(
                 if (cities.isEmpty()) {
                     sendMsg(chatId, "Город '$query' не найден. Попробуй еще раз:")
                 } else {
-                    val buttons = cities.take(8).map { city ->
+                    val buttons = cities.take(12).map { city ->
                         val cityDisplayName = getTranslatedName(city.translations, city.name, lang)
                         val countryDisplayName = city.country?.let {
                             getTranslatedName(it.translations, it.name ?: "", lang)
@@ -247,7 +247,7 @@ class TelegramBot(
                 if (countries.isEmpty()) {
                     sendMsg(chatId, "Страна '$query' не найдена.")
                 } else {
-                    val buttons = countries.take(8).map { country ->
+                    val buttons = countries.take(12).map { country ->
                         val displayName = getTranslatedName(country.translations, country.name ?: "", lang)
                         listOf(InlineKeyboardButton(displayName).apply {
                             callbackData = "SELECT_COUNTRY_${country.id}"
