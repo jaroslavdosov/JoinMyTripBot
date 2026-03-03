@@ -83,6 +83,72 @@ class TelegramBot(
                     answerCallbackQuery(callbackId)
                     sendMsg(chatId, "Город выбран! Теперь введите даты поездки:")
                 }
+                callData.startsWith("CONFIRM_DELETE_") -> {
+                    val tripId = callData.substringAfter("CONFIRM_DELETE_")
+                    val confirmKeyboard = InlineKeyboardMarkup(listOf(
+                        listOf(
+                            InlineKeyboardButton("✅ Да, удалить").apply { callbackData = "DELETE_FINAL_$tripId" },
+                            InlineKeyboardButton("🚫 Отмена").apply { callbackData = "CANCEL_DELETE_$tripId" }
+                        )
+                    ))
+                    editMsgButtons(chatId, update.callbackQuery.message.messageId, "Вы уверены, что хотите удалить эту поездку?", confirmKeyboard)
+                    answerCallbackQuery(callbackId)
+                }
+
+                callData.startsWith("DELETE_FINAL_") -> {
+                    val tripId = callData.substringAfter("DELETE_FINAL_").toLong()
+
+                    // 1. Удаляем из базы напрямую
+                    tripRepository.deleteById(tripId)
+
+                    // 2. ВАЖНО: Удаляем из коллекции в памяти текущего объекта user
+                    // Это гарантирует, что при повторном открытии списка в этом же сеансе поездка исчезнет
+                    user.trips.removeIf { it.id == tripId }
+
+                    // 3. Сохраняем пользователя, чтобы синхронизировать состояние
+                    userRepository.save(user)
+
+                    // 4. Визуально обновляем сообщение
+                    editMsgText(chatId, update.callbackQuery.message.messageId, "🗑 Поездка успешно удалена из ваших планов.")
+
+                    answerCallbackQuery(callbackId)
+                }
+
+                callData.startsWith("CANCEL_DELETE_") -> {
+                    val tripId = callData.substringAfter("CANCEL_DELETE_").toLong()
+                    val trip = tripRepository.findById(tripId).orElse(null)
+
+                    if (trip != null) {
+                        val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+                        val lang = user.languageCode
+
+                        // 1. Восстанавливаем название (как в основном списке)
+                        val destination = if (trip.isCountryWide) {
+                            "🌍 " + getTranslatedName(trip.country?.translations, trip.country?.name ?: "", lang)
+                        } else {
+                            val cTitle = getTranslatedName(trip.city?.translations, trip.city?.name ?: "", lang)
+                            val coTitle = getTranslatedName(trip.country?.translations, trip.country?.name ?: "", lang)
+                            "🏙 $cTitle ($coTitle)"
+                        }
+
+                        val tripInfo = "📍 $destination\n📅 ${trip.travelStart?.format(dateFormatter)} — ${trip.travelEnd?.format(dateFormatter)}"
+
+                        // 2. Возвращаем кнопку удаления
+                        val originalKeyboard = InlineKeyboardMarkup(listOf(
+                            listOf(InlineKeyboardButton("❌ Удалить").apply {
+                                callbackData = "CONFIRM_DELETE_$tripId"
+                            })
+                        ))
+
+                        // 3. Редактируем сообщение, возвращая исходный вид
+                        editMsgButtons(chatId, update.callbackQuery.message.messageId, tripInfo, originalKeyboard)
+                    } else {
+                        // Если вдруг поездка уже исчезла из базы
+                        editMsgText(chatId, update.callbackQuery.message.messageId, "⚠️ Поездка не найдена.")
+                    }
+                    answerCallbackQuery(callbackId)
+                }
+
             }
             return // Обязательно выходим, чтобы не обрабатывать это как текст
         }
@@ -118,10 +184,11 @@ class TelegramBot(
             "✈️ Мои планы" -> {
                 val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
-                // 1. Сначала показываем текущие планы, если они есть
                 if (user.trips.isNotEmpty()) {
-                    val tripsList = user.trips.joinToString("\n") { trip ->
-                        // Учитываем, что теперь у нас может быть либо город, либо страна
+                    sendMsg(chatId, "Ваши текущие планы:")
+
+                    // Проходимся по каждой поездке и отправляем отдельное сообщение с кнопкой удаления
+                    user.trips.forEach { trip ->
                         val destination = if (trip.isCountryWide) {
                             "🌍 " + getTranslatedName(trip.country?.translations, trip.country?.name ?: "", user.languageCode)
                         } else {
@@ -129,24 +196,32 @@ class TelegramBot(
                             val countryTitle = getTranslatedName(trip.country?.translations, trip.country?.name ?: "", user.languageCode)
                             "🏙 $cityTitle ($countryTitle)"
                         }
-                        "📍 $destination: ${trip.travelStart?.format(dateFormatter)} — ${trip.travelEnd?.format(dateFormatter)}"
+
+                        val tripInfo = "📍 $destination\n📅 ${trip.travelStart?.format(dateFormatter)} — ${trip.travelEnd?.format(dateFormatter)}"
+
+                        // Кнопка удаления именно для этой поездки
+                        val deleteBtn = InlineKeyboardMarkup(listOf(
+                            listOf(InlineKeyboardButton("❌ Удалить").apply {
+                                callbackData = "CONFIRM_DELETE_${trip.id}"
+                            })
+                        ))
+
+                        sendMsgWithButtons(chatId, tripInfo, deleteBtn)
                     }
-                    sendMsg(chatId, "Ваши текущие планы:\n$tripsList")
                 } else {
                     sendMsg(chatId, "У вас пока нет добавленных поездок.")
                 }
 
-                // 2. Предлагаем добавить новую поездку через выбор типа
-                val keyboard = InlineKeyboardMarkup(listOf(
+                // 2. Предлагаем добавить новую поездку (это сообщение идет в самом конце)
+                val addKeyboard = InlineKeyboardMarkup(listOf(
                     listOf(
                         InlineKeyboardButton("🏙 Город").apply { callbackData = "TYPE_CITY" },
                         InlineKeyboardButton("🌍 Вся страна").apply { callbackData = "TYPE_COUNTRY" }
                     )
                 ))
 
-                sendMsgWithButtons(chatId, "Хотите добавить новый план? Если вы определились с конкретным городом - выберите 'Город' (можно поочередно добавить несколько городов для страны, если хотите посетить несколько городов) Если вам не важно в какой именно город отправиться - выберите 'Вся страна.'", keyboard)
+                sendMsgWithButtons(chatId, "Хотите добавить новый план? Если вы определились с конкретным городом - выберите 'Город'. Если вам не важно, в какой именно город отправиться - выберите 'Вся страна'.", addKeyboard)
 
-                // Переводим в состояние ожидания выбора типа (через callback)
                 user.state = "WAITING_FOR_TRIP_TYPE"
                 userRepository.save(user)
                 return
@@ -412,5 +487,22 @@ class TelegramBot(
     private fun detectLanguage(text: String): String {
         val russianRange = Regex("[а-яА-ЯёЁ]")
         return if (russianRange.containsMatchIn(text)) "ru" else "en"
+    }
+
+    private fun editMsgButtons(chatId: Long, messageId: Int, text: String, keyboard: InlineKeyboardMarkup) {
+        val edit = org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText()
+        edit.chatId = chatId.toString()
+        edit.messageId = messageId
+        edit.text = text
+        edit.replyMarkup = keyboard
+        try { execute(edit) } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    private fun editMsgText(chatId: Long, messageId: Int, text: String) {
+        val edit = org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText()
+        edit.chatId = chatId.toString()
+        edit.messageId = messageId
+        edit.text = text
+        try { execute(edit) } catch (e: Exception) { e.printStackTrace() }
     }
 }
