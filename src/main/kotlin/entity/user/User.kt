@@ -20,7 +20,7 @@ class User(
     @Column(name = "last_notified_at")
     var lastNotifiedAt: java.time.LocalDateTime = java.time.LocalDateTime.now(),
 
-    val isActive: Boolean = true,
+    var isActive: Boolean = true,
 
     @OneToMany(mappedBy = "user", cascade = [CascadeType.ALL], orphanRemoval = true, fetch = FetchType.EAGER)
     var trips: MutableList<Trip> = mutableListOf(),
@@ -33,5 +33,8 @@ class User(
     @Column(name = "temp_country_id")
     var tempCountryId: Long? = null,
 
-    var languageCode: String = "ru"
+    var languageCode: String = "ru",
+
+    var bio: String? = null,
+    var photoFileId: String? = null
 )

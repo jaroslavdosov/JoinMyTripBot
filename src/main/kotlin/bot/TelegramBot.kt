@@ -37,6 +37,26 @@ class TelegramBot(
     override fun getBotUsername(): String = botName
 
     override fun onUpdateReceived(update: Update) {
+        if (update.hasMyChatMember()) {
+            val memberUpdate = update.myChatMember
+            val status = memberUpdate.newChatMember.status
+            val userId = memberUpdate.from.id
+
+            if (status == "kicked") {
+                // Пользователь заблокировал бота — скрываем его профиль
+                userRepository.findById(userId).ifPresent { user ->
+                    user.isActive = false
+                    userRepository.save(user)
+                    println("Пользователь $userId заблокировал бота. Профиль скрыт.")
+                }
+            } else if (status == "member") {
+                // Пользователь разблокировал бота — можно (по желанию) вернуть активность
+                // или просто оставить как есть, пока он сам не нажмет "Включить"
+                println("Пользователь $userId разблокировал бота.")
+            }
+            return
+        }
+
         if (update.hasCallbackQuery()) {
             val callData = update.callbackQuery.data
             val chatId = update.callbackQuery.message.chatId
@@ -71,7 +91,7 @@ class TelegramBot(
                     user.state = "WAITING_FOR_DATES"
                     userRepository.save(user)
                     answerCallbackQuery(callbackId)
-                    sendMsg(chatId, "Страна выбрана! Теперь введите даты поездки (например, 01.05.2026 - 15.05.2026):")
+                    sendMsg(chatId, "Страна выбрана! Теперь введите даты поездки (например, 01.05.2027 - 15.05.2027):")
                 }
 
                 // 4. Выбрали конкретный город
@@ -81,7 +101,7 @@ class TelegramBot(
                     user.state = "WAITING_FOR_DATES"
                     userRepository.save(user)
                     answerCallbackQuery(callbackId)
-                    sendMsg(chatId, "Город выбран! Теперь введите даты поездки:")
+                    sendMsg(chatId, "Город выбран! Теперь введите даты поездки (например, 01.05.2027 - 15.05.2027):")
                 }
                 callData.startsWith("CONFIRM_DELETE_") -> {
                     val tripId = callData.substringAfter("CONFIRM_DELETE_")
@@ -131,7 +151,7 @@ class TelegramBot(
                             "🏙 $cTitle ($coTitle)"
                         }
 
-                        val tripInfo = "📍 $destination\n📅 ${trip.travelStart?.format(dateFormatter)} — ${trip.travelEnd?.format(dateFormatter)}"
+                        val tripInfo = "📍 $destination\n📅 ${trip.travelStart?.format(dateFormatter)} - ${trip.travelEnd?.format(dateFormatter)}"
 
                         // 2. Возвращаем кнопку удаления
                         val originalKeyboard = InlineKeyboardMarkup(listOf(
@@ -149,26 +169,125 @@ class TelegramBot(
                     answerCallbackQuery(callbackId)
                 }
 
+                callData == "TOGGLE_ACTIVE" -> {
+                    user.isActive = !user.isActive
+                    userRepository.save(user)
+                    answerCallbackQuery(callbackId)
+
+                    // Редактируем старое меню, чтобы кнопки сразу поменялись
+                    val newStatus = if (user.isActive) "активирован" else "скрыт"
+                    editMsgText(chatId, update.callbackQuery.message.messageId, "Ваш профиль теперь $newStatus.")
+                    sendProfileMenu(chatId, user) // Вызываем меню заново, чтобы обновить кнопки
+                }
+
+                callData == "VIEW_MY_PROFILE" -> {
+                    val genderIcon = if (user.gender == "MALE") "👨" else "👩"
+                    val bioText = user.bio ?: "_Био не заполнено_"
+
+                    // Ссылка на профиль:
+                    // Если есть username, пишем его, если нет - просто имя со ссылкой на ID
+                    val userLink = if (user.userName != null) "@${user.userName}" else "Перейти в профиль"
+
+                    val profileInfo = """
+                        $genderIcon *${user.name}, ${user.age}*
+                        
+                        $bioText
+                        
+                        🔗 *Связь:* [$userLink](tg://user?id=${user.id})
+                    """.trimIndent()
+
+                    if (user.photoFileId != null) {
+                        val photo = org.telegram.telegrambots.meta.api.methods.send.SendPhoto()
+                        photo.chatId = chatId.toString()
+                        photo.photo = org.telegram.telegrambots.meta.api.objects.InputFile(user.photoFileId)
+                        photo.caption = profileInfo
+                        photo.parseMode = "Markdown" // Включаем поддержку ссылок
+                        execute(photo)
+                    } else {
+                        val msg = org.telegram.telegrambots.meta.api.methods.send.SendMessage()
+                        msg.chatId = chatId.toString()
+                        msg.text = "📸 *Фото не установлено*\n\n$profileInfo"
+                        msg.parseMode = "Markdown"
+                        execute(msg)
+                    }
+                    answerCallbackQuery(callbackId)
+                }
+
+                callData == "EDIT_BIO" -> {
+                    user.state = "WAITING_FOR_BIO"
+                    userRepository.save(user)
+                    answerCallbackQuery(callbackId)
+                    sendMsg(chatId, "Напиши пару предложений о себе (чем увлекаешься, какую компанию ищешь):")
+                }
+                callData == "EDIT_PHOTO" -> {
+                    user.state = "WAITING_FOR_PHOTO"
+                    userRepository.save(user)
+                    answerCallbackQuery(callbackId)
+                    sendMsg(chatId, "Отправь мне свою фотографию (лучше всего портрет):")
+                }
+
             }
             return // Обязательно выходим, чтобы не обрабатывать это как текст
         }
 
 
         // --- 2. ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ---
-        if (!update.hasMessage() || !update.message.hasText()) return
+        if (!update.hasMessage()) return
+        val message = update.message
+        // Если в сообщении нет ни текста, ни фото — тогда выходим
+        if (!message.hasText() && !message.hasPhoto()) return
 
-        val messageText: String = update.message.text ?: return
+
+
         val chatId: Long = update.message.chatId
         val user = userRepository.findById(chatId).orElseGet {
             User(id = chatId, userName = update.message.from.userName)
         }
 
+        if (message.hasPhoto() && user.state == "WAITING_FOR_PHOTO") {
+            // Берем фото в самом лучшем качестве (последнее в списке)
+            val photo = message.photo.maxByOrNull { it.fileSize ?: 0 }
+            user.photoFileId = photo?.fileId
+            user.state = "MAIN_MENU"
+            userRepository.save(user)
+
+            sendMsg(chatId, "✅ Фото успешно сохранено! Теперь оно будет отображаться в твоей анкете.")
+            sendProfileMenu(chatId, user) // Возвращаем пользователя в меню профиля
+            return // Выходим из метода
+        }
+
+      // Если фото нет, проверяем наличие текста для остальных команд
+        if (!message.hasText()) return
+        val messageText = message.text
+
         // --- ОБРАБОТКА ГЛОБАЛЬНЫХ КОМАНД МЕНЮ ---
         when (messageText) {
-            "/start", "🔄 Регистрация заново" -> {
-                user.state = "START"
+            "/start"-> {
+                // 1. Сначала очищаем коллекцию в самом объекте, чтобы Hibernate не пытался их спасти
+                user.trips.clear()
+
+                // 2. Сбрасываем данные анкеты
+                user.name = null
+                user.age = null
+                user.gender = "MALE"
+                user.state = "WAITING_FOR_NAME"
+                user.bio = null
+                user.photoFileId = null
+                user.isActive = true
+
+
+                // 3. СНАЧАЛА сохраняем пользователя с пустым списком
+                // Это разорвет связи в Hibernate
                 userRepository.save(user)
-                startRegistration(chatId, user)
+
+                // 4. ТОЛЬКО ПОТОМ удаляем записи из таблицы поездок
+                tripRepository.deleteByUserId(chatId)
+
+                // 5. Отправляем сообщение
+                val msg = SendMessage(chatId.toString(), "Привет! Давай создадим анкету. Как тебя зовут?")
+                msg.replyMarkup = ReplyKeyboardRemove(true)
+                execute(msg)
+
                 return
             }
             "/menu" -> {
@@ -177,8 +296,8 @@ class TelegramBot(
                 sendMainMenu(chatId, "Выберите раздел:")
                 return
             }
-            "👤 Мой профиль", "⚙️ Настройки" -> {
-                sendMsg(chatId, "Этот раздел находится в разработке 🛠")
+            "👤 Мой профиль" -> {
+                sendProfileMenu(chatId, user)
                 return
             }
             "✈️ Мои планы" -> {
@@ -220,7 +339,7 @@ class TelegramBot(
                     )
                 ))
 
-                sendMsgWithButtons(chatId, "Хотите добавить новый план? Если вы определились с конкретным городом - выберите 'Город'. Если вам не важно, в какой именно город отправиться - выберите 'Вся страна'.", addKeyboard)
+                sendMsgWithButtons(chatId, "Хочешь добавить новый план? Выбери формат поиска:", addKeyboard)
 
                 user.state = "WAITING_FOR_TRIP_TYPE"
                 userRepository.save(user)
@@ -231,13 +350,21 @@ class TelegramBot(
 
         // --- ОБРАБОТКА ШАГОВ РЕГИСТРАЦИИ (FSM) ---
         when (user.state) {
+            "WAITING_FOR_BIO" -> {
+                user.bio = messageText
+                user.state = "MAIN_MENU"
+                userRepository.save(user)
+                sendMsg(chatId, "✅ Твое описание обновлено!")
+                sendProfileMenu(chatId, user)
+            }
+
             "START" -> {
-                sendMsg(chatId, "Привет! Давай создадим анкету. Как вас зовут?")
+                sendMsg(chatId, "Привет! Давай создадим анкету. Как тебя зовут?")
                 user.state = "WAITING_FOR_NAME"
             }
             "WAITING_FOR_NAME" -> {
                 user.name = messageText
-                sendMsg(chatId, "Сколько вам лет?")
+                sendMsg(chatId, "Сколько тебе лет?")
                 user.state = "WAITING_FOR_AGE"
             }
             "WAITING_FOR_AGE" -> {
@@ -265,7 +392,7 @@ class TelegramBot(
                     ))
 
                     // Отправляем сообщение С КНОПКАМИ
-                    sendMsgWithButtons(chatId, "Ваш профиль готов! 🎉\n\nТеперь давайте запланируем вашу первую поездку. Если вы определились с конкретным городом - выберите 'Город' (можно поочередно добавить несколько городов для страны, если хотите посетить несколько городов) Если вам не важно в какой именно город отправиться - выберите 'Вся страна.'", keyboard)
+                    sendMsgWithButtons(chatId, "Твой профиль готов! 🎉\n\nТеперь давайте запланируем твою первую поездку. Выбери формат поиска:'", keyboard)
                 } else {
                     sendMsg(chatId, "Пожалуйста, используйте кнопки для выбора пола.")
                 }
@@ -415,7 +542,7 @@ class TelegramBot(
         val keyboardMarkup = ReplyKeyboardMarkup().apply {
             keyboard = listOf(
                 KeyboardRow().apply { add("✈️ Мои планы"); add("👤 Мой профиль") },
-                KeyboardRow().apply { add("⚙️ Настройки"); add("🔄 Регистрация заново") }
+                KeyboardRow().apply { add("⚙️ Поиск попутчиков") }
             )
             resizeKeyboard = true
         }
@@ -432,7 +559,7 @@ class TelegramBot(
         userRepository.save(user)
 
         // Отправляем сообщение с удалением старой клавиатуры (чтобы не мешала вводу имени)
-        val msg = SendMessage(chatId.toString(), "Как тебя зовут?")
+        val msg = SendMessage(chatId.toString(), "Как вас зовут?")
         msg.replyMarkup = ReplyKeyboardRemove(true)
         execute(msg)
     }
@@ -504,5 +631,33 @@ class TelegramBot(
         edit.messageId = messageId
         edit.text = text
         try { execute(edit) } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    private fun sendProfileMenu(chatId: Long, user: User) {
+        val statusEmoji = if (user.isActive) "✅ Виден в поиске" else "💤 Скрыт из поиска"
+        val text = "👤 *Твой профиль*\n\nСтатус: $statusEmoji\n\nЗдесь ты можешь настроить свою анкету, которую будут видеть другие путешественники."
+
+        val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+        if (user.isActive) {
+            // Если профиль активен — показываем все настройки
+            buttons.add(listOf(
+                InlineKeyboardButton("✍️ О себе").apply { callbackData = "EDIT_BIO" },
+                InlineKeyboardButton("📸 Фото").apply { callbackData = "EDIT_PHOTO" }
+            ))
+            buttons.add(listOf(
+                InlineKeyboardButton("👁 Предпросмотр").apply { callbackData = "VIEW_MY_PROFILE" }
+            ))
+            buttons.add(listOf(
+                InlineKeyboardButton("🚫 Скрыть профиль").apply { callbackData = "TOGGLE_ACTIVE" }
+            ))
+        } else {
+            // Если скрыт — только кнопка включения
+            buttons.add(listOf(
+                InlineKeyboardButton("✅ Включить профиль").apply { callbackData = "TOGGLE_ACTIVE" }
+            ))
+        }
+
+        sendMsgWithButtons(chatId, text, InlineKeyboardMarkup(buttons))
     }
 }
