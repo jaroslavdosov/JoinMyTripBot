@@ -5,6 +5,7 @@ import org.example.entity.country.Country
 import org.example.entity.trip.Trip
 import org.example.entity.user.User
 import org.springframework.stereotype.Component
+import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto
 import org.telegram.telegrambots.meta.api.objects.InputFile
@@ -63,7 +64,7 @@ class MessageFactory(
             replyMarkup = ReplyKeyboardMarkup().apply {
                 keyboard = listOf(
                     KeyboardRow().apply { add("✈️ Мои планы"); add("👤 Мой профиль") },
-                    KeyboardRow().apply { add("⚙️ Поиск попутчиков") }
+                    KeyboardRow().apply { add("🔍 Поиск попутчиков") }
                 )
                 resizeKeyboard = true
             }
@@ -250,5 +251,109 @@ $tripsInfo
             parseMode = "Markdown"
             replyMarkup = InlineKeyboardMarkup(buttons)
         }
+    }
+
+    // В MessageFactory.kt
+
+    // В MessageFactory.kt
+
+    // Внутри MessageFactory.kt
+
+    fun sendMatchProfile(bot: org.telegram.telegrambots.bots.TelegramLongPollingBot, viewer: User, match: User, currentIndex: Int, total: Int) {
+        val genderIcon = if (match.gender == "MALE") "👨" else "👩"
+        val fullDateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+
+        // Безопасное получение города проживания
+        val homeCity = match.homeCity?.let {
+            tripService.getTranslatedName(it.translations, it.name, viewer.languageCode)
+        } ?: "не указан"
+
+        // Формируем список планов (как в профиле)
+        val tripsInfo = if (match.trips.isEmpty()) {
+            "_Нет активных планов_"
+        } else {
+            match.trips.joinToString("\n") { trip ->
+                val dest = tripService.getFormattedDestinationForSearch(trip.city, trip.country, viewer.languageCode)
+                val start = trip.travelStart?.format(fullDateFormatter) ?: "??.??"
+                val end = trip.travelEnd?.format(fullDateFormatter) ?: "??.??"
+                "• $dest ($start-$end)"
+            }
+        }
+
+        val safeBio = (match.bio ?: "_Био не заполнено_").replace("_", "\\_").replace("*", "\\*")
+        val safeName = (match.name ?: "Путешественник").replace("_", "\\_").replace("*", "\\*")
+
+        val profileText = """
+🔥 *Найден попутчик!* ($currentIndex из $total)
+
+$genderIcon *${safeName}, ${match.age ?: "??"}* | 🏠 $homeCity
+📝 $safeBio
+
+✈️ *Планы:*
+$tripsInfo
+    """.trimIndent()
+
+        val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+        // Кнопка связи
+        val contactUrl = if (!match.userName.isNullOrBlank()) "https://t.me/${match.userName}" else "tg://user?id=${match.id}"
+        buttons.add(listOf(InlineKeyboardButton("📩 Написать").apply { url = contactUrl }))
+
+        // Кнопки навигации
+        val navigationRow = mutableListOf<InlineKeyboardButton>()
+        if (currentIndex < total) {
+            navigationRow.add(InlineKeyboardButton("➡️ Следующий").apply { callbackData = "SEARCH_NEXT_$currentIndex" })
+        }
+        navigationRow.add(InlineKeyboardButton("🏠 В меню").apply { callbackData = "MAIN_MENU" })
+        buttons.add(navigationRow)
+
+        val markup = InlineKeyboardMarkup(buttons)
+
+        // Отправка фото или текста
+        if (!match.photoFileId.isNullOrBlank()) {
+            bot.execute(SendPhoto().apply {
+                setChatId(viewer.id.toString())
+                setPhoto(InputFile(match.photoFileId))
+                caption = profileText
+                parseMode = "Markdown"
+                replyMarkup = markup
+            })
+        } else {
+            bot.execute(SendMessage().apply {
+                setChatId(viewer.id.toString())
+                text = "📸 *Без фото*\n\n$profileText"
+                parseMode = "Markdown"
+                replyMarkup = markup
+            })
+        }
+    }
+
+    // В MessageFactory.kt
+
+    fun sendMainMenu(bot: org.telegram.telegrambots.bots.TelegramLongPollingBot, chatId: Long, text: String) {
+        val sendMessage = org.telegram.telegrambots.meta.api.methods.send.SendMessage()
+        sendMessage.chatId = chatId.toString()
+        sendMessage.text = text
+        sendMessage.parseMode = "Markdown"
+
+        // Создаем кнопки главного меню
+        val keyboardMarkup = org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup()
+        keyboardMarkup.selective = true
+        keyboardMarkup.resizeKeyboard = true
+        keyboardMarkup.oneTimeKeyboard = false
+
+        val row1 = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow()
+
+        row1.add("✈️ Мои планы")
+        row1.add("👤 Мой профиль")
+
+        val row2 = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow()
+        row2.add("🔍 Поиск попутчиков")
+
+
+        keyboardMarkup.keyboard = listOf(row1, row2)
+        sendMessage.replyMarkup = keyboardMarkup
+
+        bot.execute(sendMessage)
     }
 }

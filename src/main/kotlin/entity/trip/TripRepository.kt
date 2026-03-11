@@ -1,6 +1,7 @@
 package org.example.entity.trip
 
 import jakarta.transaction.Transactional
+import org.example.entity.user.User
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
@@ -18,23 +19,27 @@ interface TripRepository : JpaRepository<Trip, Long> {
     fun findAllByUserId(userId: Long): List<Trip>
 
     @Query("""
-        SELECT DISTINCT t FROM Trip t 
-        JOIN FETCH t.user 
-        WHERE t.user.id <> :myUserId 
-          AND t.user.isActive = true 
-          AND (
-            (t.city.id = :myCityId) OR 
-            (t.country.id = :myCountryId AND (t.isCountryWide = true OR :isMyTripCountryWide = true))
-          )
-          AND t.travelStart <= :myEnd 
-          AND t.travelEnd >= :myStart
+        SELECT DISTINCT t.user FROM Trip t 
+        WHERE (
+            (:cityId IS NOT NULL AND t.city.id = :cityId) 
+            OR 
+            (:countryId IS NOT NULL AND (t.country.id = :countryId OR t.city.country.id = :countryId))
+        )
+        AND t.user.id != :currentUserId
+        AND t.user.isActive = true
+        AND (:gender = 'ALL' OR t.user.gender = :gender)
+        AND t.user.age BETWEEN :minAge AND :maxAge
+        AND t.travelStart <= :searchEnd 
+        AND t.travelEnd >= :searchStart
     """)
     fun findMatches(
-        @Param("myUserId") myUserId: Long,
-        @Param("myCityId") myCityId: Long?,
-        @Param("myCountryId") myCountryId: Long?,
-        @Param("isMyTripCountryWide") isMyTripCountryWide: Boolean,
-        @Param("myStart") myStart: java.time.LocalDate,
-        @Param("myEnd") myEnd: java.time.LocalDate
-    ): List<Trip>
+        @Param("cityId") cityId: Long?,
+        @Param("countryId") countryId: Long?,
+        @Param("currentUserId") currentUserId: Long,
+        @Param("gender") gender: String,
+        @Param("minAge") minAge: Int,
+        @Param("maxAge") maxAge: Int,
+        @Param("searchStart") searchStart: java.time.LocalDate,
+        @Param("searchEnd") searchEnd: java.time.LocalDate
+    ): List<User>
 }

@@ -8,6 +8,7 @@ import org.example.entity.user.User
 import org.example.entity.user.UserRepository
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
@@ -75,6 +76,13 @@ class UpdateHandler(
                 messageFactory.sendFullProfile(bot, user)
                 return
             }
+
+            "🔍 Поиск попутчиков" -> {
+                user.state = "SEARCH_WAITING_LOCATION"
+                userRepository.save(user)
+                bot.execute(SendMessage(user.id.toString(), "Куда ищем попутчиков? Напиши название города или страны:"))
+                return
+            }
         }
 
         processState(update.message, user, bot)
@@ -85,6 +93,101 @@ class UpdateHandler(
         val chatId = user.id
 
         when (user.state) {
+            "START_SEARCH_AGAIN" -> {
+                user.state = "SEARCH_WAITING_LOCATION"
+                userRepository.save(user)
+                bot.execute(SendMessage(user.id.toString(), "Куда ищем попутчиков? Напиши название города или страны:"))
+            }
+
+            "SEARCH_WAITING_LOCATION" -> {
+                val query = message.text
+                val cities = cityRepository.searchCities(query).take(4)
+                val countries = countryRepository.searchCountries(query).take(3) // Предположим, у вас есть countryRepository
+
+                if (cities.isEmpty() && countries.isEmpty()) {
+                    bot.execute(SendMessage(user.id.toString(), "🔍 Ничего не найдено. Попробуйте другое название:"))
+                } else {
+                    val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+                    // Сначала выводим страны (Вся страна)
+                    countries.forEach { country ->
+                        val label = "🌍 ${tripService.getTranslatedName(country.translations, country.name, user.languageCode)} (Вся страна)"
+                        buttons.add(listOf(InlineKeyboardButton(label).apply {
+                            callbackData = "SEARCH_SELECT_COUNTRY_${country.id}"
+                        }))
+                    }
+
+                    // Затем выводим города
+                    cities.forEach { city ->
+                        val label = "📍 ${tripService.getFormattedDestinationForSearch(city, null, user.languageCode)}"
+                        buttons.add(listOf(InlineKeyboardButton(label).apply {
+                            callbackData = "SEARCH_SELECT_CITY_${city.id}"
+                        }))
+                    }
+
+                    bot.execute(SendMessage(user.id.toString(), "Выберите направление поиска:").apply {
+                        replyMarkup = InlineKeyboardMarkup(buttons)
+                    })
+                }
+            }
+
+            "SEARCH_WAITING_AGE" -> {
+                val text = message.text.replace(" ", "")
+                val parts = text.split("-")
+
+                try {
+                    var min: Int
+                    var max: Int
+
+                    if (parts.size == 2) {
+                        min = parts[0].toInt()
+                        max = parts[1].toInt()
+                    } else {
+                        val age = text.toInt()
+                        min = age - 3
+                        max = age + 3
+                    }
+
+                    // ПРОВЕРКИ:
+                    // 1. Меняем местами, если ввели наоборот (30-20 -> 20-30)
+                    if (min > max) {
+                        val temp = min
+                        min = max
+                        max = temp
+                    }
+
+                    // 2. Адекватные границы возраста
+                    if (min < 18 || max > 100) {
+                        sendText(bot, user.id, "🔞 Поиск доступен только для лиц от 18 до 100 лет. Введи корректный возраст:")
+                        return
+                    }
+
+                    user.searchAgeMin = min
+                    user.searchAgeMax = max
+                    user.state = "SEARCH_WAITING_DATES"
+                    userRepository.save(user)
+
+                    sendText(bot, user.id, "Принято: от $min до $max лет.\nВведи даты в формате `дд.мм.гггг-дд.мм.гггг`:")
+
+                } catch (e: Exception) {
+                    sendText(bot, user.id, "⚠️ Ошибка! Введи возраст числом (например, `25`) или диапазоном (например, `20-30`):")
+                }
+            }
+
+            "SEARCH_WAITING_DATES" -> {
+                val dates = tripService.parseStrictDates(message.text)
+                if (dates == null) {
+                    sendText(bot, user.id, "⚠️ Неверный формат или даты в прошлом. Попробуй еще раз (дд.мм.гггг-дд.мм.гггг):")
+                } else {
+                    user.searchDateStart = dates.first
+                    user.searchDateEnd = dates.second
+                    user.state = "MAIN_MENU"
+                    userRepository.save(user)
+
+                    // Запускаем сам поиск!
+                    executeSearch(bot, user)
+                }
+            }
             "WAITING_FOR_BIO" -> {
                 user.bio = message.text
                 user.state = "MAIN_MENU"
@@ -229,6 +332,19 @@ class UpdateHandler(
         val callbackId = update.callbackQuery.id
 
         when {
+            data.startsWith("SEARCH_NEXT_") -> {
+                val nextIndex = data.removePrefix("SEARCH_NEXT_").toInt()
+                // Вызываем поиск снова, но передаем индекс, чтобы показать следующего
+                executeSearch(bot, user, pageIndex = nextIndex)
+            }
+
+            data.startsWith("SEARCH_GENDER_") -> {
+                user.searchGender = data.removePrefix("SEARCH_GENDER_")
+                user.state = "SEARCH_WAITING_AGE"
+                userRepository.save(user)
+                bot.execute(SendMessage(user.id.toString(), "Введите диапазон возраста (например, 20-30):"))
+            }
+
             data.startsWith("SET_HOME_CITY_") -> {
                 val cityId = data.removePrefix("SET_HOME_CITY_").toLong()
                 user.homeCity = cityRepository.findById(cityId).orElse(null)
@@ -251,6 +367,27 @@ class UpdateHandler(
                 userRepository.save(user)
                 // Возвращаемся к списку
                 bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+            }
+
+            data.startsWith("SEARCH_SELECT_COUNTRY_") -> {
+                val countryId = data.removePrefix("SEARCH_SELECT_COUNTRY_").toLong()
+                user.searchCountryId = countryId
+                user.searchCityId = null // Сбрасываем город, так как ищем по всей стране
+                goToGenderSelection(bot, user)
+            }
+
+            data.startsWith("SEARCH_SELECT_CITY_") -> {
+                val cityId = data.removePrefix("SEARCH_SELECT_CITY_").toLong()
+                user.searchCityId = cityId
+                user.searchCountryId = null // Сбрасываем страну
+                goToGenderSelection(bot, user)
+            }
+
+            data == "MAIN_MENU" -> {
+                user.state = "MAIN_MENU"
+                userRepository.save(user)
+                // Теперь метод существует и принимает (bot, Long, String)
+                messageFactory.sendMainMenu(bot, user.id, "Вы вернулись в главное меню. Что выберем?")
             }
 
             data == "GO_TO_PLANS" -> {
@@ -283,6 +420,19 @@ class UpdateHandler(
                 } catch (e: Exception) {}
 
                 messageFactory.sendFullProfile(bot, user)
+            }
+
+            data == "START_SEARCH_AGAIN" -> {
+                user.state = "SEARCH_WAITING_LOCATION"
+                // Сбрасываем старые фильтры, чтобы начать с чистого листа
+                user.searchCityId = null
+                user.searchCountryId = null
+                userRepository.save(user)
+
+                bot.execute(SendMessage(chatId.toString(), "Окей, давай попробуем еще раз! 🌍\nКуда планируешь поехать? Напиши город или страну:"))
+
+                // Важно: отвечаем на callback, чтобы у пользователя пропали "часики" на кнопке
+                bot.execute(AnswerCallbackQuery().apply { callbackQueryId = update.callbackQuery.id })
             }
 
             data.startsWith("DELETE_TRIP_") -> {
@@ -349,6 +499,29 @@ class UpdateHandler(
                 }
                 bot.execute(editMsg)
             }
+
+            data.startsWith("SEARCH_SELECT_LOC_") -> {
+                val locId = data.removePrefix("SEARCH_SELECT_LOC_").toLong()
+                user.searchCityId = locId
+                user.state = "SEARCH_WAITING_GENDER"
+                userRepository.save(user)
+
+                val buttons = listOf(
+                    listOf(InlineKeyboardButton("👨 Мужской").apply { callbackData = "SEARCH_GENDER_MALE" }),
+                    listOf(InlineKeyboardButton("👩 Женский").apply { callbackData = "SEARCH_GENDER_FEMALE" }),
+                    listOf(InlineKeyboardButton("👫 Любой").apply { callbackData = "SEARCH_GENDER_ALL" })
+                )
+                bot.execute(SendMessage(user.id.toString(), "Кого ищем?").apply {
+                    replyMarkup = InlineKeyboardMarkup(buttons)
+                })
+            }
+
+            data.startsWith("SEARCH_GENDER_") -> {
+                user.searchGender = data.removePrefix("SEARCH_GENDER_")
+                user.state = "SEARCH_WAITING_AGE"
+                userRepository.save(user)
+                sendText(bot, user.id, "Укажи возраст попутчика (например, 20-35):")
+            }
         }
     }
     private fun saveTripAndFinish(user: User, start: LocalDate, end: LocalDate, bot: TelegramLongPollingBot) {
@@ -370,4 +543,54 @@ class UpdateHandler(
         bot.execute(messageFactory.createMainMenu(user.id, "✅ Поездка добавлена!"))
     }
 
+    // В UpdateHandler.kt
+    private fun executeSearch(bot: TelegramLongPollingBot, user: User, pageIndex: Int = 0) {
+        val sStart = user.searchDateStart ?: return
+        val sEnd = user.searchDateEnd ?: return
+
+        val matches = tripRepository.findMatches(
+            cityId = user.searchCityId,
+            countryId = user.searchCountryId, // Передаем ID страны из юзера
+            currentUserId = user.id,
+            gender = user.searchGender ?: "ALL",
+            minAge = user.searchAgeMin ?: 18,
+            maxAge = user.searchAgeMax ?: 99,
+            searchStart = sStart,
+            searchEnd = sEnd
+        )
+
+        if (matches.isEmpty()) {
+            val markup = InlineKeyboardMarkup(listOf(
+                listOf(InlineKeyboardButton("🔍 Попробовать снова").apply { callbackData = "START_SEARCH_AGAIN" }),
+                listOf(InlineKeyboardButton("🏠 В главное меню").apply { callbackData = "MAIN_MENU" })
+            ))
+
+            bot.execute(SendMessage(user.id.toString(), "😔 К сожалению, попутчиков по таким параметрам пока нет. Попробуйте изменить даты или город!").apply {
+                replyMarkup = markup
+            })
+            return
+        }
+
+        // Проверяем, не вышли ли мы за пределы списка
+        if (pageIndex < matches.size) {
+            val currentMatch = matches[pageIndex]
+            // Отображаем профиль. Передаем pageIndex + 1 для визуального счетчика (1/3, 2/3...)
+            messageFactory.sendMatchProfile(bot, user, currentMatch, pageIndex + 1, matches.size)
+        } else {
+            bot.execute(SendMessage(user.id.toString(), "✅ Это были все найденные анкеты."))
+        }
+    }
+
+    private fun goToGenderSelection(bot: TelegramLongPollingBot, user: User) {
+        user.state = "SEARCH_WAITING_GENDER"
+        userRepository.save(user)
+        val buttons = listOf(
+            listOf(InlineKeyboardButton("👨 Мужской").apply { callbackData = "SEARCH_GENDER_MALE" }),
+            listOf(InlineKeyboardButton("👩 Женский").apply { callbackData = "SEARCH_GENDER_FEMALE" }),
+            listOf(InlineKeyboardButton("👫 Любой").apply { callbackData = "SEARCH_GENDER_ALL" })
+        )
+        bot.execute(SendMessage(user.id.toString(), "Кого ищем?").apply {
+            replyMarkup = InlineKeyboardMarkup(buttons)
+        })
+    }
 }

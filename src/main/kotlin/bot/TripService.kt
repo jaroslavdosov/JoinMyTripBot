@@ -27,18 +27,6 @@ class TripService(
     fun detectLanguage(text: String): String =
         if (Regex("[а-яА-ЯёЁ]").containsMatchIn(text)) "ru" else "en"
 
-    fun findMatchesForUser(user: User): List<User> {
-        val matchedUsers = mutableSetOf<User>()
-        user.trips.forEach { trip ->
-            val found = tripRepository.findMatches(
-                user.id!!, trip.city?.id, trip.country?.id,
-                trip.isCountryWide, trip.travelStart!!, trip.travelEnd!!
-            )
-            found.forEach { it.user?.let { u -> matchedUsers.add(u) } }
-        }
-        return matchedUsers.toList()
-    }
-
     private val dateRegex = Regex("""(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?""")
 
     fun parseDates(text: String): Pair<LocalDate, LocalDate>? {
@@ -92,16 +80,29 @@ class TripService(
 
     private val fullFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
+    // В TripService.kt
+
     fun parseStrictDates(text: String): Pair<java.time.LocalDate, java.time.LocalDate>? {
+        // Убираем все пробелы, чтобы "01. 01. 2026" тоже работало
+        val cleanText = text.replace(" ", "").trim()
+
+        // Регулярное выражение: ДД.ММ.ГГГГ-ДД.ММ.ГГГГ
         val regex = Regex("""^(\d{2}\.\d{2}\.\d{4})-(\d{2}\.\d{2}\.\d{4})$""")
-        val match = regex.find(text.replace(" ", "")) ?: return null
+        val match = regex.find(cleanText) ?: return null
 
         return try {
-            val start = java.time.LocalDate.parse(match.groupValues[1], fullFormatter)
-            val end = java.time.LocalDate.parse(match.groupValues[2], fullFormatter)
+            val formatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+            val start = java.time.LocalDate.parse(match.groupValues[1], formatter)
+            val end = java.time.LocalDate.parse(match.groupValues[2], formatter)
 
             val today = java.time.LocalDate.now()
-            if (start.isBefore(today) || end.isBefore(start)) return null
+
+            // ЛОГИЧЕСКАЯ ПРОВЕРКА:
+            // 1. Дата начала не может быть сильно в прошлом (допустим, сегодня или позже)
+            // 2. Дата окончания не может быть раньше начала
+            if (start.isBefore(today.minusDays(1)) || end.isBefore(start)) {
+                return null
+            }
 
             start to end
         } catch (e: Exception) {

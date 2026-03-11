@@ -2,6 +2,7 @@ package org.example.entity.user
 import jakarta.persistence.*
 import org.example.entity.city.City
 import org.example.entity.trip.Trip
+import java.time.LocalDate
 
 @Entity
 @Table(name = "users")
@@ -43,5 +44,13 @@ class User(
 
     @ManyToOne
     @JoinColumn(name = "home_city_id")
-    var homeCity: City? = null
+    var homeCity: City? = null,
+
+    var searchCityId: Long? = null,
+    var searchCountryId: Long? = null,
+    var searchAgeMin: Int? = null,
+    var searchAgeMax: Int? = null,
+    var searchGender: String? = null, // MALE, FEMALE, ALL
+    var searchDateStart: LocalDate? = null,
+    var searchDateEnd: LocalDate? = null
 )
