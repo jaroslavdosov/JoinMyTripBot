@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto
+import org.telegram.telegrambots.meta.api.objects.InputFile
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault
@@ -37,6 +39,7 @@ class TelegramBot(
     override fun getBotUsername(): String = botName
 
     override fun onUpdateReceived(update: Update) {
+        println("Получен апдейт: ${update}")
         if (update.hasMyChatMember()) {
             val memberUpdate = update.myChatMember
             val status = memberUpdate.newChatMember.status
@@ -169,6 +172,28 @@ class TelegramBot(
                     answerCallbackQuery(callbackId)
                 }
 
+                callData.startsWith("NEXT_MATCH_") -> {
+                    val nextIndex = callData.replace("NEXT_MATCH_", "").toInt()
+
+                    // Тут есть нюанс: нам нужно снова получить список matches.
+                    // Чтобы не делать тяжелый запрос в БД каждый раз, можно:
+                    // А) Повторить поиск (проще всего для начала)
+                    // Б) Сохранить ID найденных юзеров в кэш
+
+                    val myTrips = user.trips
+                    val matchesSet = mutableSetOf<User>()
+                    myTrips.forEach { trip ->
+                        val found = tripRepository.findMatches(
+                            user.id!!, trip.city?.id, trip.country?.id,
+                            trip.isCountryWide, trip.travelStart!!, trip.travelEnd!!
+                        )
+                        found.forEach { it.user?.let { it1 -> matchesSet.add(it1) } }
+                    }
+
+                    showMatchedUsers(chatId, matchesSet.toList(), nextIndex)
+                    answerCallbackQuery(callbackId)
+                }
+
                 callData == "TOGGLE_ACTIVE" -> {
                     user.isActive = !user.isActive
                     userRepository.save(user)
@@ -181,35 +206,65 @@ class TelegramBot(
                 }
 
                 callData == "VIEW_MY_PROFILE" -> {
+                    val lang = user.languageCode
                     val genderIcon = if (user.gender == "MALE") "👨" else "👩"
                     val bioText = user.bio ?: "_Био не заполнено_"
+                    val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
-                    // Ссылка на профиль:
-                    // Если есть username, пишем его, если нет - просто имя со ссылкой на ID
-                    val userLink = if (user.userName != null) "@${user.userName}" else "Перейти в профиль"
+                    // 1. Формируем список планов (поездок)
+                    val tripsText = if (user.trips.isEmpty()) {
+                        "📍 _Планы не добавлены_"
+                    } else {
+                        user.trips.joinToString("\n") { trip ->
+                            val destination = if (trip.isCountryWide) {
+                                "🌍 " + getTranslatedName(trip.country?.translations, trip.country?.name ?: "", lang)
+                            } else {
+                                "🏙 " + getTranslatedName(trip.city?.translations, trip.city?.name ?: "", lang)
+                            }
+                            "▫️ $destination (${trip.travelStart?.format(dateFormatter)} — ${trip.travelEnd?.format(dateFormatter)})"
+                        }
+                    }
 
+                    // 2. Итоговый текст анкеты
                     val profileInfo = """
                         $genderIcon *${user.name}, ${user.age}*
                         
                         $bioText
                         
-                        🔗 *Связь:* [$userLink](tg://user?id=${user.id})
+                        *✈️ Мои планы:*
+                        $tripsText
+                        
+                        🔗 [Написать мне](tg://user?id=${user.id})
                     """.trimIndent()
 
+                    // 3. Клавиатура управления (те же кнопки, что в меню профиля, для удобства)
+                    val keyboard = InlineKeyboardMarkup(listOf(
+                        listOf(
+                            InlineKeyboardButton("✍️ Изменить био").apply { callbackData = "EDIT_BIO" },
+                            InlineKeyboardButton("📸 Изменить фото").apply { callbackData = "EDIT_PHOTO" }
+                        ),
+                        listOf(
+                            InlineKeyboardButton("🔙 Назад в меню").apply { callbackData = "GO_TO_PROFILE" } // Нужно будет добавить этот обработчик
+                        )
+                    ))
+
+                    // 4. Отправка (Фото или Текст)
                     if (user.photoFileId != null) {
                         val photo = org.telegram.telegrambots.meta.api.methods.send.SendPhoto()
                         photo.chatId = chatId.toString()
                         photo.photo = org.telegram.telegrambots.meta.api.objects.InputFile(user.photoFileId)
                         photo.caption = profileInfo
-                        photo.parseMode = "Markdown" // Включаем поддержку ссылок
+                        photo.parseMode = "Markdown"
+                        photo.replyMarkup = keyboard
                         execute(photo)
                     } else {
-                        val msg = org.telegram.telegrambots.meta.api.methods.send.SendMessage()
-                        msg.chatId = chatId.toString()
-                        msg.text = "📸 *Фото не установлено*\n\n$profileInfo"
-                        msg.parseMode = "Markdown"
-                        execute(msg)
+                        sendMsgWithButtons(chatId, "📸 *Фото не установлено*\n\n$profileInfo", keyboard)
                     }
+                    answerCallbackQuery(callbackId)
+                }
+
+                callData == "GO_TO_PROFILE" -> {
+                    sendProfileMenu(chatId, user) // Твоя функция, которую мы писали раньше
                     answerCallbackQuery(callbackId)
                 }
 
@@ -224,6 +279,37 @@ class TelegramBot(
                     userRepository.save(user)
                     answerCallbackQuery(callbackId)
                     sendMsg(chatId, "Отправь мне свою фотографию (лучше всего портрет):")
+                }
+
+                callData == "SEARCH_AUTO" -> {
+                    val myTrips = user.trips
+                    // Используем LinkedHashSet, чтобы сохранить порядок и убрать дубликаты
+                    val matchedUsers = mutableSetOf<User>()
+
+                    myTrips.forEach { myTrip ->
+                        val foundTrips = tripRepository.findMatches(
+                            user.id!!,
+                            myTrip.city?.id,
+                            myTrip.country?.id,
+                            myTrip.isCountryWide,
+                            myTrip.travelStart!!,
+                            myTrip.travelEnd!!
+                        )
+                        // Добавляем именно ВЛАДЕЛЬЦА поездки в Set
+                        foundTrips.forEach { it.user?.let { it1 -> matchedUsers.add(it1) } }
+                    }
+
+                    if (matchedUsers.isEmpty()) {
+                        sendMsg(chatId, "Совпадений пока нет 😔")
+                    } else {
+                        // Теперь здесь будет реальное количество уникальных людей
+                        val usersList = matchedUsers.toList()
+                        sendMsg(chatId, "Найдено уникальных попутчиков: ${usersList.size}")
+
+                        // ВАЖНО: Вызываем показ первой анкеты
+                        showMatchedUsers(chatId, usersList, 0)
+                    }
+                    answerCallbackQuery(callbackId)
                 }
 
             }
@@ -344,6 +430,27 @@ class TelegramBot(
                 user.state = "WAITING_FOR_TRIP_TYPE"
                 userRepository.save(user)
                 return
+            }
+
+            "⚙\uFE0F Поиск попутчиков" -> {
+                val text = """
+                    *Выберите режим поиска:*
+                    
+                    🤖 *Автоподбор* — покажу всех, чьи планы пересекаются с твоими.
+                    🔎 *Ручной поиск* — найди попутчиков в конкретное место.
+                """.trimIndent()
+
+                val keyboard = InlineKeyboardMarkup(listOf(
+                    listOf(
+                        InlineKeyboardButton("🤖 Автоподбор").apply { callbackData = "SEARCH_AUTO" },
+                        InlineKeyboardButton("🔎 Ручной поиск").apply { callbackData = "SEARCH_MANUAL" }
+                    )
+                ))
+
+                val msg = SendMessage(chatId.toString(), text)
+                msg.replyMarkup = keyboard
+                msg.parseMode = "Markdown"
+                execute(msg)
             }
 
         }
@@ -659,5 +766,91 @@ class TelegramBot(
         }
 
         sendMsgWithButtons(chatId, text, InlineKeyboardMarkup(buttons))
+    }
+
+    fun showMatchedUsers(chatId: Long, matches: List<User>, index: Int) {
+        try {
+            if (matches.isEmpty() || index >= matches.size) {
+                sendMsg(chatId, "Больше анкет не найдено. 😊")
+                return
+            }
+
+            val match = matches[index]
+            val genderIcon = if (match.gender == "MALE") "👨" else "👩"
+
+            // 1. Очищаем текст от символов, которые ломают Markdown
+            val safeName = match.name?.replace("_", " ")?.replace("*", "") ?: "Без имени"
+            val safeBio = match.bio?.replace("_", " ")?.replace("*", "") ?: "Описание отсутствует"
+
+            // 2. Формируем текст с Markdown-ссылкой на профиль по ID
+            // Синтаксис: [Текст](tg://user?id=12345)
+
+            val contactLink = if (!match.userName.isNullOrBlank()) {
+                // Ссылка на Username ВСЕГДА активна
+                "https://t.me/${match.userName!!.replace("@", "")}"
+            } else {
+                // Если ника нет, оставляем ссылку по ID
+                "tg://user?id=${match.id}"
+            }
+
+            val info = """
+            $genderIcon *${safeName}, ${match.age ?: "?"}*
+            
+            ${safeBio}
+            
+           💬 [Нажать, чтобы написать попутчику]($contactLink)
+                """.trimIndent()
+
+            // 3. Создаем клавиатуру (без кнопки "Написать", так как ссылка уже в тексте)
+            val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+            // Кнопка "Дальше", если есть еще анкеты
+            if (index < matches.size - 1) {
+                buttons.add(listOf(
+                    InlineKeyboardButton("➡️ Следующая анкетка").apply {
+                        callbackData = "NEXT_MATCH_${index + 1}"
+                    }
+                ))
+            }
+
+            // Кнопка возврата в меню
+            buttons.add(listOf(
+                InlineKeyboardButton("🔙 В главное меню").apply {
+                    callbackData = "GO_TO_PROFILE"
+                }
+            ))
+
+            val inlineKeyboard = InlineKeyboardMarkup().apply {
+                keyboard = buttons
+            }
+
+            // 4. Отправка (сначала пробуем фото, если нет — текст)
+            if (!match.photoFileId.isNullOrBlank()) {
+                val photo = SendPhoto().apply {
+                    setChatId(chatId.toString())
+                    setPhoto(InputFile(match.photoFileId))
+                    caption = info
+                    setParseMode("Markdown")
+                    replyMarkup = inlineKeyboard
+                }
+                execute(photo)
+            } else {
+                val msg = SendMessage().apply {
+                    setChatId(chatId.toString())
+                    text = "📸 *Без фото*\n\n$info"
+                    setParseMode("Markdown")
+                    replyMarkup = inlineKeyboard
+                }
+                execute(msg)
+            }
+
+            println("Анкетка ${match.id} (индекс $index) успешно отправлена!")
+
+        } catch (e: Exception) {
+            println("!!! ОШИБКА В showMatchedUsers: ${e.message}")
+            e.printStackTrace()
+            // Если Markdown всё равно ломается, отправляем чистым текстом как запасной вариант
+            sendMsg(chatId, "Произошла ошибка при загрузке анкеты. Попробуй следующую.")
+        }
     }
 }

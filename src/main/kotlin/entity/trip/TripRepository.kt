@@ -14,20 +14,27 @@ interface TripRepository : JpaRepository<Trip, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("DELETE FROM Trip t WHERE t.user.id = :userId")
-    fun deleteByUserId(userId: Long)
+    fun deleteByUserId(@Param("userId") userId: Long) // Проверь, чтобы тут было именно :userId и @Param("userId")
+    fun findAllByUserId(userId: Long): List<Trip>
 
     @Query("""
-        SELECT t FROM Trip t 
-        WHERE t.user.id != :userId 
-        AND (t.city.id = :cityId OR t.country.id = :countryId)
-        AND t.travelStart <= :end 
-        AND t.travelEnd >= :start
+        SELECT DISTINCT t FROM Trip t 
+        JOIN FETCH t.user 
+        WHERE t.user.id <> :myUserId 
+          AND t.user.isActive = true 
+          AND (
+            (t.city.id = :myCityId) OR 
+            (t.country.id = :myCountryId AND (t.isCountryWide = true OR :isMyTripCountryWide = true))
+          )
+          AND t.travelStart <= :myEnd 
+          AND t.travelEnd >= :myStart
     """)
     fun findMatches(
-        @Param("cityId") cityId: Long?,
-        @Param("countryId") countryId: Long?,
-        @Param("userId") userId: Long,
-        @Param("start") start: LocalDate,
-        @Param("end") end: LocalDate
+        @Param("myUserId") myUserId: Long,
+        @Param("myCityId") myCityId: Long?,
+        @Param("myCountryId") myCountryId: Long?,
+        @Param("isMyTripCountryWide") isMyTripCountryWide: Boolean,
+        @Param("myStart") myStart: java.time.LocalDate,
+        @Param("myEnd") myEnd: java.time.LocalDate
     ): List<Trip>
 }
