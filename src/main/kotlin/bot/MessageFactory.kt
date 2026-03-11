@@ -1,5 +1,8 @@
 package org.example.bot
 
+import org.example.entity.city.City
+import org.example.entity.country.Country
+import org.example.entity.trip.Trip
 import org.example.entity.user.User
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
@@ -10,7 +13,9 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import java.time.format.DateTimeFormatter
 
 @Component
-class MessageFactory {
+class MessageFactory(
+    private val tripService: TripService // Добавь эту строку
+) {
 
     private val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
@@ -58,5 +63,75 @@ class MessageFactory {
         }
         msg.replyMarkup = keyboard
         return msg
+    }
+
+    fun createDeleteConfirmation(chatId: Long, tripId: Long): SendMessage {
+        return SendMessage(chatId.toString(), "⚠️ Ты уверен, что хочешь удалить эту поездку?").apply {
+            replyMarkup = InlineKeyboardMarkup(listOf(
+                listOf(
+                    InlineKeyboardButton("✅ Да, удалить").apply { callbackData = "DELETE_FINAL_$tripId" },
+                    InlineKeyboardButton("🔙 Отмена").apply { callbackData = "GO_TO_PLANS" }
+                )
+            ))
+        }
+    }
+
+    // Внутри MessageFactory.kt
+
+    // Кнопки при поиске (результаты)
+    fun createSelectionButtons(chatId: Long, cities: List<City>, countries: List<Country>, lang: String): SendMessage {
+        val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+        countries.take(5).forEach { country ->
+            val label = tripService.getFormattedDestinationForSearch(null, country, lang)
+            buttons.add(listOf(InlineKeyboardButton(label).apply {
+                callbackData = "SELECT_COUNTRY_${country.id}"
+            }))
+        }
+
+        cities.take(10).forEach { city ->
+            val label = tripService.getFormattedDestinationForSearch(city, null, lang)
+            buttons.add(listOf(InlineKeyboardButton(label).apply {
+                callbackData = "SELECT_CITY_${city.id}"
+            }))
+        }
+
+        return SendMessage(chatId.toString(), "Выбери подходящий вариант:").apply {
+            replyMarkup = InlineKeyboardMarkup(buttons)
+        }
+    }
+
+    // Список планов с кнопкой "Удалить [Название]"
+    fun createTripsList(chatId: Long, trips: List<Trip>, lang: String): SendMessage {
+        val text = StringBuilder()
+        val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+        if (trips.isEmpty()) {
+            text.append("✈️ *У тебя пока нет запланированных поездок.*")
+        } else {
+            text.append("✈️ *Твои запланированные поездки:*\n\n")
+
+            trips.forEachIndexed { index, trip ->
+                // Используем ту же логику именования, что и в поиске
+                val destination = tripService.getFormattedDestinationForSearch(trip.city, trip.country, lang)
+                val dateRange = "🗓 `${trip.travelStart} - ${trip.travelEnd}`"
+
+                text.append("${index + 1}. 📍 $destination\n$dateRange\n\n")
+
+                // Кнопка удаления с названием под каждым маршрутом
+                buttons.add(listOf(
+                    InlineKeyboardButton("❌ Удалить $destination").apply {
+                        callbackData = "CONFIRM_DELETE_${trip.id}"
+                    }
+                ))
+            }
+        }
+
+        buttons.add(listOf(InlineKeyboardButton("➕ Добавить поездку").apply { callbackData = "ADD_TRIP" }))
+
+        return SendMessage(chatId.toString(), text.toString()).apply {
+            parseMode = "Markdown"
+            replyMarkup = InlineKeyboardMarkup(buttons)
+        }
     }
 }

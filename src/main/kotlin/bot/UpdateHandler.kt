@@ -2,6 +2,7 @@ package org.example.bot
 
 import org.example.entity.city.CityRepository
 import org.example.entity.country.CountryRepository
+import org.example.entity.trip.Trip
 import org.example.entity.trip.TripRepository
 import org.example.entity.user.User
 import org.example.entity.user.UserRepository
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Component
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.objects.Update
+import java.time.LocalDate
 
 @Component
 class UpdateHandler(
@@ -34,25 +36,25 @@ class UpdateHandler(
     }
 
     private fun handleMessage(update: Update, user: User, bot: TelegramLongPollingBot) {
-        val message = update.message
-        val messageText = message.text ?: ""
+        val messageText = update.message.text ?: ""
+        val chatId = user.id
 
-        // 1. Глобальные команды (всегда приоритетны)
         when (messageText) {
-            "/start" -> {
-                resetUser(user, bot)
-                return
-            }
+            "/start" -> { resetUser(user, bot); return }
             "/menu" -> {
                 user.state = "MAIN_MENU"
                 userRepository.save(user)
-                bot.execute(messageFactory.createMainMenu(user.id, "Выберите раздел:"))
+                bot.execute(messageFactory.createMainMenu(chatId, "Главное меню:"))
+                return
+            }
+            // НОВАЯ ЛОГИКА ТУТ:
+            "✈️ Мои планы" -> {
+                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
                 return
             }
         }
 
-        // 2. Обработка состояний (FSM) - ТУТ БЫЛА ПАУЗА
-        processState(message, user, bot)
+        processState(update.message, user, bot)
     }
 
     private fun processState(message: org.telegram.telegrambots.meta.api.objects.Message, user: User, bot: TelegramLongPollingBot) {
@@ -87,7 +89,36 @@ class UpdateHandler(
                     bot.execute(messageFactory.createMainMenu(chatId, welcomeMsg))
                 }
             }
-            // Другие состояния добавим следующим шагом
+            "WAITING_FOR_DESTINATION" -> {
+                val query = message.text
+                val cities = cityRepository.searchCities(query)
+                val countries = countryRepository.searchCountries(query)
+
+                if (cities.isEmpty() && countries.isEmpty()) {
+                    sendText(bot, user.id, "Ничего не нашлось. Попробуй написать название иначе.")
+                } else {
+                    bot.execute(messageFactory.createSelectionButtons(user.id, cities, countries, user.languageCode))
+                }
+            }
+
+            "WAITING_FOR_DATE" -> {
+                val dates = tripService.parseStrictDates(message.text)
+                val today = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+
+                if (dates == null) {
+                    val errorMsg = """
+                        ⚠️ *Ошибка валидации дат!*
+                        
+                        1. Формат строго: `01.01.2025-05.01.2025`
+                        2. Дата начала не может быть раньше $today
+                        3. Дата окончания не может быть раньше даты начала.
+                    """.trimIndent()
+
+                    bot.execute(SendMessage(user.id.toString(), errorMsg).apply { parseMode = "Markdown" })
+                } else {
+                    saveTripAndFinish(user, dates.first, dates.second, bot)
+                }
+            }
         }
     }
 
@@ -116,6 +147,92 @@ class UpdateHandler(
     }
 
     private fun handleCallback(update: Update, user: User, bot: TelegramLongPollingBot) {
-        // Логику кнопок вернем в следующем сообщении, чтобы не перегружать код
+        val data = update.callbackQuery.data
+        val chatId = user.id
+        val callbackId = update.callbackQuery.id
+
+        when {
+            data.startsWith("CONFIRM_DELETE_") -> {
+                val tripId = data.removePrefix("CONFIRM_DELETE_").toLong()
+                bot.execute(messageFactory.createDeleteConfirmation(chatId, tripId))
+            }
+
+            data.startsWith("DELETE_FINAL_") -> {
+                val tripId = data.removePrefix("DELETE_FINAL_").toLong()
+                tripRepository.deleteById(tripId)
+                user.trips.removeIf { it.id == tripId }
+                userRepository.save(user)
+                // Возвращаемся к списку
+                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+            }
+
+            data == "GO_TO_PLANS" -> {
+                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+            }
+
+            data == "ADD_TRIP" -> {
+                user.state = "WAITING_FOR_DESTINATION"
+                userRepository.save(user)
+                sendText(bot, chatId, "Куда едем? (Город или страна)")
+            }
+
+            data.startsWith("DELETE_TRIP_") -> {
+                val tripId = data.removePrefix("DELETE_TRIP_").toLong()
+                tripRepository.deleteById(tripId)
+
+                // Обновляем список пользователя в памяти и БД
+                user.trips.removeIf { it.id == tripId }
+                userRepository.save(user)
+
+                // Уведомляем пользователя (всплывающее окно в Telegram)
+                bot.execute(org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery(callbackId).apply {
+                    text = "Поездка удалена"
+                })
+
+                // Перерисовываем список планов
+                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+            }
+
+            data == "ADD_TRIP" -> {
+                user.state = "WAITING_FOR_DESTINATION"
+                userRepository.save(user)
+                bot.execute(SendMessage(chatId.toString(), "Куда планируешь поехать? Напиши город или страну."))
+            }
+
+            data.startsWith("SELECT_CITY_") -> {
+                val cityId = data.removePrefix("SELECT_CITY_").toLong()
+                user.tempCityId = cityId
+                user.state = "WAITING_FOR_DATE"
+                userRepository.save(user)
+                sendText(bot, user.id, "Отлично! Введи дату поездки  в формате: 01.01.2027-01.14.2027.")
+            }
+
+            data.startsWith("SELECT_COUNTRY_") -> {
+                val countryId = data.removePrefix("SELECT_COUNTRY_").toLong()
+                user.tempCountryId = countryId
+                user.state = "WAITING_FOR_DATE"
+                userRepository.save(user)
+                sendText(bot, user.id, "Записал страну! Введи дату поездки  в формате: 01.01.2027-01.14.2027")
+            }
+        }
     }
+    private fun saveTripAndFinish(user: User, start: LocalDate, end: LocalDate, bot: TelegramLongPollingBot) {
+        val trip = Trip(
+            user = user,
+            city = user.tempCityId?.let { cityRepository.findById(it).get() },
+            country = user.tempCountryId?.let { countryRepository.findById(it).get() },
+            isCountryWide = user.tempCountryId != null && user.tempCityId == null,
+            travelStart = start,
+            travelEnd = end
+        )
+        tripRepository.save(trip)
+        user.trips.add(trip)
+        user.state = "MAIN_MENU"
+        user.tempCityId = null
+        user.tempCountryId = null
+        userRepository.save(user)
+
+        bot.execute(messageFactory.createMainMenu(user.id, "✅ Поездка добавлена!"))
+    }
+
 }
