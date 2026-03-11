@@ -90,21 +90,18 @@ class TripService(
         } else "Неизвестно"
     }
 
+    private val fullFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+
     fun parseStrictDates(text: String): Pair<java.time.LocalDate, java.time.LocalDate>? {
         val regex = Regex("""^(\d{2}\.\d{2}\.\d{4})-(\d{2}\.\d{2}\.\d{4})$""")
         val match = regex.find(text.replace(" ", "")) ?: return null
 
         return try {
-            val formatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
-            val start = java.time.LocalDate.parse(match.groupValues[1], formatter)
-            val end = java.time.LocalDate.parse(match.groupValues[2], formatter)
-            val today = java.time.LocalDate.now()
+            val start = java.time.LocalDate.parse(match.groupValues[1], fullFormatter)
+            val end = java.time.LocalDate.parse(match.groupValues[2], fullFormatter)
 
-            // ПРОВЕРКИ:
-            // 1. Дата начала не в прошлом
-            if (start.isBefore(today)) return null
-            // 2. Дата окончания не раньше даты начала
-            if (end.isBefore(start)) return null
+            val today = java.time.LocalDate.now()
+            if (start.isBefore(today) || end.isBefore(start)) return null
 
             start to end
         } catch (e: Exception) {

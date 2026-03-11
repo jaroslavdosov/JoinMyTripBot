@@ -1,5 +1,6 @@
 package org.example.entity.user
 import jakarta.persistence.*
+import org.example.entity.city.City
 import org.example.entity.trip.Trip
 
 @Entity
@@ -12,6 +13,8 @@ class User(
     var description: String? = null,
     var userName: String? = null,
     var age: Int? = null,
+
+
 
 
     @Column(name = "state")
@@ -36,5 +39,9 @@ class User(
     var languageCode: String = "ru",
 
     var bio: String? = null,
-    var photoFileId: String? = null
+    var photoFileId: String? = null,
+
+    @ManyToOne
+    @JoinColumn(name = "home_city_id")
+    var homeCity: City? = null
 )

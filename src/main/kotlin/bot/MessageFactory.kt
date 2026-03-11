@@ -6,6 +6,8 @@ import org.example.entity.trip.Trip
 import org.example.entity.user.User
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto
+import org.telegram.telegrambots.meta.api.objects.InputFile
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
@@ -19,6 +21,43 @@ class MessageFactory(
 
     private val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
+    // Внутри MessageFactory.kt
+
+    fun createProfileView(user: User): SendMessage {
+        val status = if (user.isActive) "✅ Виден в поиске" else "💤 Скрыт"
+        val gender = if (user.gender == "MALE") "Мужской" else "Женский"
+
+        val info = """
+        👤 *Твой профиль*
+        
+        *Имя:* ${user.name ?: "Не указано"}
+        *Возраст:* ${user.age ?: "Не указан"}
+        *Пол:* $gender
+        *О себе:* ${user.bio ?: "Пусто"}
+        
+        *Статус:* $status
+    """.trimIndent()
+
+        val buttons = mutableListOf<List<InlineKeyboardButton>>()
+
+        // Первый ряд кнопок
+        buttons.add(listOf(
+            InlineKeyboardButton("✍️ Изменить БИО").apply { callbackData = "EDIT_BIO" },
+            InlineKeyboardButton("📸 Изменить фото").apply { callbackData = "EDIT_PHOTO" }
+        ))
+
+        // Второй ряд
+        val toggleLabel = if (user.isActive) "🚫 Скрыть анкету" else "✅ Включить анкету"
+        buttons.add(listOf(
+            InlineKeyboardButton(toggleLabel).apply { callbackData = "TOGGLE_ACTIVE" }
+        ))
+
+        return SendMessage(user.id.toString(), info).apply {
+            parseMode = "Markdown"
+            replyMarkup = InlineKeyboardMarkup(buttons)
+        }
+    }
+
     fun createMainMenu(chatId: Long, text: String): SendMessage {
         return SendMessage(chatId.toString(), text).apply {
             replyMarkup = ReplyKeyboardMarkup().apply {
@@ -28,6 +67,72 @@ class MessageFactory(
                 )
                 resizeKeyboard = true
             }
+        }
+    }
+
+// Внутри MessageFactory.kt
+
+    fun sendFullProfile(bot: org.telegram.telegrambots.bots.TelegramLongPollingBot, user: User) {
+        val genderIcon = if (user.gender == "MALE") "👨" else "👩"
+        val status = if (user.isActive) "🟢 Активен" else "🔴 Скрыт"
+
+        val homeCity = user.homeCity?.let {
+            tripService.getTranslatedName(it.translations, it.name, user.languageCode)
+        } ?: "не указан"
+
+        // Форматтер для полной даты
+        val fullDateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+
+        // Формируем список планов
+        val tripsInfo = if (user.trips.isEmpty()) {
+            "_Нет активных планов_"
+        } else {
+            user.trips.joinToString("\n") { trip ->
+                val dest = tripService.getFormattedDestinationForSearch(trip.city, trip.country, user.languageCode)
+                val start = trip.travelStart?.format(fullDateFormatter) ?: "??"
+                val end = trip.travelEnd?.format(fullDateFormatter) ?: "??"
+                "• $dest ($start-$end)" // Полный формат дат
+            }
+        }
+
+        // Текст профиля (убедись, что нет пробелов перед $tripsInfo)
+        val profileText = """
+$genderIcon *${user.name}, ${user.age}* | 🏠 $homeCity
+📝 ${user.bio ?: "_Био не заполнено_"}
+
+✈️ *Планы:*
+$tripsInfo
+
+Статус: $status
+    """.trimIndent()
+
+        val markup = InlineKeyboardMarkup(listOf(
+            listOf(
+                InlineKeyboardButton("🏠 Город").apply { callbackData = "EDIT_HOME_CITY" },
+                InlineKeyboardButton("✍️ БИО").apply { callbackData = "EDIT_BIO" },
+                InlineKeyboardButton("📸 Фото").apply { callbackData = "EDIT_PHOTO" }
+            ),
+            listOf(
+                InlineKeyboardButton(if (user.isActive) "🚫 Скрыть анкету" else "✅ Включить анкету").apply { callbackData = "TOGGLE_ACTIVE" }
+            )
+        ))
+
+        // Отправка (используем ранее созданную логику с DeleteMessage + SendPhoto/SendMessage)
+        if (!user.photoFileId.isNullOrBlank()) {
+            bot.execute(SendPhoto().apply {
+                setChatId(user.id.toString())
+                setPhoto(InputFile(user.photoFileId))
+                caption = profileText
+                parseMode = "Markdown"
+                replyMarkup = markup
+            })
+        } else {
+            bot.execute(SendMessage().apply {
+                setChatId(user.id.toString())
+                text = "📸 *Добавь фото!*\n\n$profileText"
+                parseMode = "Markdown"
+                replyMarkup = markup
+            })
         }
     }
 
@@ -42,9 +147,9 @@ class MessageFactory(
                 InlineKeyboardButton("📸 Фото").apply { callbackData = "EDIT_PHOTO" }
             ))
             buttons.add(listOf(InlineKeyboardButton("👁 Предпросмотр").apply { callbackData = "VIEW_MY_PROFILE" }))
-            buttons.add(listOf(InlineKeyboardButton("🚫 Скрыть профиль").apply { callbackData = "TOGGLE_ACTIVE" }))
+            buttons.add(listOf(InlineKeyboardButton("🚫 Скрыть анкету").apply { callbackData = "TOGGLE_ACTIVE" }))
         } else {
-            buttons.add(listOf(InlineKeyboardButton("✅ Включить профиль").apply { callbackData = "TOGGLE_ACTIVE" }))
+            buttons.add(listOf(InlineKeyboardButton("✅ Включить анкету").apply { callbackData = "TOGGLE_ACTIVE" }))
         }
 
         return SendMessage(chatId.toString(), text).apply {
@@ -102,6 +207,10 @@ class MessageFactory(
     }
 
     // Список планов с кнопкой "Удалить [Название]"
+// Внутри MessageFactory.kt
+
+    private val fullDateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+
     fun createTripsList(chatId: Long, trips: List<Trip>, lang: String): SendMessage {
         val text = StringBuilder()
         val buttons = mutableListOf<List<InlineKeyboardButton>>()
@@ -112,13 +221,18 @@ class MessageFactory(
             text.append("✈️ *Твои запланированные поездки:*\n\n")
 
             trips.forEachIndexed { index, trip ->
-                // Используем ту же логику именования, что и в поиске
+                // 1. Формируем название (город/страна)
                 val destination = tripService.getFormattedDestinationForSearch(trip.city, trip.country, lang)
-                val dateRange = "🗓 `${trip.travelStart} - ${trip.travelEnd}`"
 
-                text.append("${index + 1}. 📍 $destination\n$dateRange\n\n")
+                // 2. Формируем СТРОГИЙ формат даты
+                val start = trip.travelStart?.format(fullDateFormatter) ?: "??.??.????"
+                val end = trip.travelEnd?.format(fullDateFormatter) ?: "??.??.????"
+                val dateRange = "`$start-$end`"
 
-                // Кнопка удаления с названием под каждым маршрутом
+                // 3. Добавляем текст в сообщение (без лишних отступов)
+                text.append("${index + 1}. 📍 *$destination*\n   🗓 $dateRange\n\n")
+
+                // 4. Кнопка удаления с названием
                 buttons.add(listOf(
                     InlineKeyboardButton("❌ Удалить $destination").apply {
                         callbackData = "CONFIRM_DELETE_${trip.id}"
@@ -127,7 +241,10 @@ class MessageFactory(
             }
         }
 
-        buttons.add(listOf(InlineKeyboardButton("➕ Добавить поездку").apply { callbackData = "ADD_TRIP" }))
+        // Кнопка добавить всегда снизу
+        buttons.add(listOf(
+            InlineKeyboardButton("➕ Добавить поездку").apply { callbackData = "ADD_TRIP" }
+        ))
 
         return SendMessage(chatId.toString(), text.toString()).apply {
             parseMode = "Markdown"

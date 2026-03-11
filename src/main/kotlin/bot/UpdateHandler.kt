@@ -10,6 +10,8 @@ import org.springframework.stereotype.Component
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.objects.Update
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
 import java.time.LocalDate
 
 @Component
@@ -52,6 +54,11 @@ class UpdateHandler(
                 bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
                 return
             }
+
+            "👤 Мой профиль" -> {
+                messageFactory.sendFullProfile(bot, user)
+                return
+            }
         }
 
         processState(update.message, user, bot)
@@ -62,6 +69,34 @@ class UpdateHandler(
         val chatId = user.id
 
         when (user.state) {
+            "WAITING_FOR_BIO" -> {
+                user.bio = message.text
+                user.state = "MAIN_MENU"
+                userRepository.save(user)
+
+                // 1. Уведомляем об успехе
+                bot.execute(SendMessage(user.id.toString(), "✅ Био обновлено!"))
+                // 2. Показываем обновленный профиль (он подтянет и фото, и город)
+                messageFactory.sendFullProfile(bot, user)
+            }
+            "WAITING_FOR_PHOTO" -> {
+                // 1. Проверяем, есть ли в сообщении фотографии
+                if (message.hasPhoto()) {
+                    // Берем самое качественное фото
+                    val fileId = message.photo.maxByOrNull { it.fileSize }?.fileId
+
+                    user.photoFileId = fileId
+                    user.state = "MAIN_MENU" // Только теперь меняем состояние
+                    userRepository.save(user)
+
+                    bot.execute(SendMessage(user.id.toString(), "✅ Фотография успешно сохранена!"))
+                    messageFactory.sendFullProfile(bot, user)
+                } else {
+                    // 2. Если прислали текст, файл или стикер вместо фото
+                    bot.execute(SendMessage(user.id.toString(), "⚠️ Пожалуйста, пришлите именно **фотографию** (как изображение), а не текст или документ."))
+                }
+            }
+
             "WAITING_FOR_NAME" -> {
                 user.name = messageText
                 user.state = "WAITING_FOR_AGE"
@@ -79,6 +114,32 @@ class UpdateHandler(
                     sendText(bot, chatId, "Введи число от 18 до 110.")
                 }
             }
+
+            "EDIT_HOME_CITY" -> {
+                user.state = "WAITING_FOR_HOME_CITY"
+                userRepository.save(user)
+                sendText(bot, user.id, "Напиши название города, в котором ты живешь:")
+            }
+
+            "WAITING_FOR_HOME_CITY" -> {
+                val query = message.text
+                val cities = cityRepository.searchCities(query)
+
+                if (cities.isEmpty()) {
+                    bot.execute(SendMessage(user.id.toString(), "🔍 Город не найден. Попробуй ввести название иначе:"))
+                } else {
+                    // Создаем кнопки для выбора конкретного города из результатов поиска
+                    val buttons = cities.take(8).map { city ->
+                        val label = tripService.getFormattedDestinationForSearch(city, null, user.languageCode)
+                        listOf(InlineKeyboardButton(label).apply { callbackData = "SET_HOME_CITY_${city.id}" })
+                    }
+
+                    bot.execute(SendMessage(user.id.toString(), "Выберите ваш город из списка:").apply {
+                        replyMarkup = InlineKeyboardMarkup(buttons)
+                    })
+                }
+            }
+
             "WAITING_FOR_GENDER" -> {
                 if (messageText == "Мужской" || messageText == "Женский") {
                     user.gender = if (messageText == "Мужской") "MALE" else "FEMALE"
@@ -148,10 +209,20 @@ class UpdateHandler(
 
     private fun handleCallback(update: Update, user: User, bot: TelegramLongPollingBot) {
         val data = update.callbackQuery.data
-        val chatId = user.id
+        var chatId = user.id
         val callbackId = update.callbackQuery.id
 
         when {
+            data.startsWith("SET_HOME_CITY_") -> {
+                val cityId = data.removePrefix("SET_HOME_CITY_").toLong()
+                user.homeCity = cityRepository.findById(cityId).orElse(null)
+                user.state = "MAIN_MENU"
+                userRepository.save(user)
+
+                bot.execute(SendMessage(user.id.toString(), "✅ Город установлен!"))
+                messageFactory.sendFullProfile(bot, user)
+            }
+
             data.startsWith("CONFIRM_DELETE_") -> {
                 val tripId = data.removePrefix("CONFIRM_DELETE_").toLong()
                 bot.execute(messageFactory.createDeleteConfirmation(chatId, tripId))
@@ -174,6 +245,28 @@ class UpdateHandler(
                 user.state = "WAITING_FOR_DESTINATION"
                 userRepository.save(user)
                 sendText(bot, chatId, "Куда едем? (Город или страна)")
+            }
+
+            data == "EDIT_HOME_CITY" -> {
+                user.state = "WAITING_FOR_HOME_CITY"
+                userRepository.save(user)
+                // Важно: используй bot.execute, если sendText не определен
+                bot.execute(SendMessage(chatId.toString(), "🏠 Напиши название города, в котором ты живешь:"))
+            }
+
+            data == "TOGGLE_ACTIVE" -> {
+                user.isActive = !user.isActive
+                userRepository.save(user)
+
+                // После переключения статуса удаляем старое сообщение и шлем обновленный профиль
+                // (Так проще, чем редактировать Caption в SendPhoto через API)
+                try {
+                    bot.execute(org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage(
+                        chatId.toString(), update.callbackQuery.message.messageId
+                    ))
+                } catch (e: Exception) {}
+
+                messageFactory.sendFullProfile(bot, user)
             }
 
             data.startsWith("DELETE_TRIP_") -> {
@@ -204,7 +297,7 @@ class UpdateHandler(
                 user.tempCityId = cityId
                 user.state = "WAITING_FOR_DATE"
                 userRepository.save(user)
-                sendText(bot, user.id, "Отлично! Введи дату поездки  в формате: 01.01.2027-01.14.2027.")
+                sendText(bot, user.id, "Отлично! Введи дату поездки  в формате: 01.01.2027-01.14.2027")
             }
 
             data.startsWith("SELECT_COUNTRY_") -> {
@@ -213,6 +306,32 @@ class UpdateHandler(
                 user.state = "WAITING_FOR_DATE"
                 userRepository.save(user)
                 sendText(bot, user.id, "Записал страну! Введи дату поездки  в формате: 01.01.2027-01.14.2027")
+            }
+
+            data == "EDIT_BIO" -> {
+                user.state = "WAITING_FOR_BIO"
+                userRepository.save(user)
+                sendText(bot, user.id, "Напиши немного о себе (интересы, кого ищешь):")
+            }
+            data == "EDIT_PHOTO" -> {
+                user.state = "WAITING_FOR_PHOTO"
+                userRepository.save(user)
+                sendText(bot, user.id, "Пришли свою фотографию:")
+            }
+            data == "TOGGLE_ACTIVE" -> {
+                user.isActive = !user.isActive
+                userRepository.save(user)
+
+                // Исправленный блок EditMessageText
+                val editMsg = org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText().apply {
+                    setChatId(user.id.toString()) // Используем сеттер для надежности
+                    messageId = update.callbackQuery.message.messageId
+                    val newView = messageFactory.createProfileView(user)
+                    text = newView.text
+                    parseMode = "Markdown"
+                    replyMarkup = newView.replyMarkup as InlineKeyboardMarkup
+                }
+                bot.execute(editMsg)
             }
         }
     }
