@@ -42,7 +42,23 @@ class UpdateHandler(
         val chatId = user.id
 
         when (messageText) {
-            "/start" -> { resetUser(user, bot); return }
+            "/start" -> {
+                // 1. Удаляем старого пользователя, если он есть
+                userRepository.findById(update.message.from.id).ifPresent { existingUser ->
+                    userRepository.delete(existingUser)
+                }
+
+                // 2. Создаем нового "чистого" пользователя
+                val newUser = User(id = update.message.from.id).apply {
+                    state = "WAITING_FOR_NAME" // Устанавливаем первый шаг регистрации
+                    languageCode = update.message.from.languageCode ?: "ru"
+                }
+                userRepository.save(newUser)
+
+                // 3. Сразу отправляем первый вопрос
+                bot.execute(SendMessage(newUser.id.toString(), "Привет! Давай создадим профиль с нуля. Как тебя зовут?"))
+                return
+            }
             "/menu" -> {
                 user.state = "MAIN_MENU"
                 userRepository.save(user)
