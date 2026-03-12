@@ -78,10 +78,17 @@ class UpdateHandler(
             }
 
             "🔍 Поиск попутчиков" -> {
-                user.state = "SEARCH_WAITING_LOCATION"
-                userRepository.save(user)
-                bot.execute(SendMessage(user.id.toString(), "Куда ищем попутчиков? Напиши название города или страны:"))
-                return
+                // Кладем обе кнопки в один внутренний список для горизонтального отображения
+                val horizontalButtons = listOf(
+                    listOf(
+                        InlineKeyboardButton("🆕 Новый поиск").apply { callbackData = "SEARCH_START_NEW" },
+                        InlineKeyboardButton("🔄 Повторить прошлый").apply { callbackData = "SEARCH_REPEAT_LAST" }
+                    )
+                )
+
+                bot.execute(SendMessage(user.id.toString(), "Выберите режим поиска:").apply {
+                    replyMarkup = InlineKeyboardMarkup(horizontalButtons)
+                })
             }
         }
 
@@ -93,6 +100,7 @@ class UpdateHandler(
         val chatId = user.id
 
         when (user.state) {
+            // В handleCallback
             "START_SEARCH_AGAIN" -> {
                 user.state = "SEARCH_WAITING_LOCATION"
                 userRepository.save(user)
@@ -177,7 +185,15 @@ class UpdateHandler(
             "SEARCH_WAITING_DATES" -> {
                 val dates = tripService.parseStrictDates(message.text)
                 if (dates == null) {
-                    sendText(bot, user.id, "⚠️ Неверный формат или даты в прошлом. Попробуй еще раз (дд.мм.гггг-дд.мм.гггг):")
+                    sendText(bot, user.id, """
+                            ⚠️ *Неверный формат или период!*
+                            
+                            Проверьте:
+                            1. Формат: `дд.мм.гггг-дд.мм.гггг`
+                            2. Поездка не должна быть в прошлом.
+                            3. Планировать можно максимум на *1 год вперед*.
+                            4. Длительность поездки — не более *3 месяцев*.
+                        """.trimIndent())
                 } else {
                     user.searchDateStart = dates.first
                     user.searchDateEnd = dates.second
@@ -289,9 +305,11 @@ class UpdateHandler(
                     val errorMsg = """
                         ⚠️ *Ошибка валидации дат!*
                         
-                        1. Формат строго: `01.01.2025-05.01.2025`
+                        1. Формат строго: `дд.мм.гггг-дд.мм.гггг`
                         2. Дата начала не может быть раньше $today
                         3. Дата окончания не может быть раньше даты начала.
+                        4. Планировать можно максимум на *1 год вперед*.
+                        5. Длительность поездки — не более *3 месяцев*.
                     """.trimIndent()
 
                     bot.execute(SendMessage(user.id.toString(), errorMsg).apply { parseMode = "Markdown" })
@@ -381,6 +399,58 @@ class UpdateHandler(
                 user.searchCityId = cityId
                 user.searchCountryId = null // Сбрасываем страну
                 goToGenderSelection(bot, user)
+            }
+
+
+            data == "SEARCH_REPEAT_LAST" -> {
+                if (user.searchCityId == null && user.searchCountryId == null) {
+                    val buttons = listOf(listOf(
+                        InlineKeyboardButton("🆕 Новый").apply { callbackData = "SEARCH_START_NEW" },
+                        InlineKeyboardButton("🔄 Повторить").apply { callbackData = "SEARCH_REPEAT_LAST" }
+                    ))
+                    bot.execute(SendMessage(user.id.toString(), "😔 История поисков пуста.").apply {
+                        replyMarkup = InlineKeyboardMarkup(buttons)
+                    })
+                } else {
+                    // 1. Получаем красивое название локации на русском
+                    val locationName = user.searchCityId?.let { id ->
+                        cityRepository.findById(id).orElse(null)?.let { city ->
+                            tripService.getTranslatedName(city.translations, city.name, "ru")
+                        }
+                    } ?: user.searchCountryId?.let { id ->
+                        countryRepository.findById(id).orElse(null)?.let { country ->
+                            tripService.getTranslatedName(country.translations, country.name, "ru")
+                        }
+                    } ?: "Неизвестно"
+
+                    // 2. Превращаем код пола в смайлик
+                    val genderDisplay = when (user.searchGender) {
+                        "MALE" -> "👨 Мужской"
+                        "FEMALE" -> "👩 Женский"
+                        else -> "👫 Любой"
+                    }
+
+                    val dateStart = user.searchDateStart?.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")) ?: "??"
+                    val dateEnd = user.searchDateEnd?.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")) ?: "??"
+
+                    // 3. Отправляем сообщение с подтверждением параметров
+                    bot.execute(SendMessage(user.id.toString(), """
+            🚀 *Ищу по вашим фильтрам:*
+            📍 Место: *$locationName*
+            📅 Даты: $dateStart — $dateEnd
+            👥 Возраст: ${user.searchAgeMin}-${user.searchAgeMax} лет
+            🚻 Пол: $genderDisplay
+        """.trimIndent()).apply { parseMode = "Markdown" })
+
+                    // 4. Запускаем сам поиск
+                    executeSearch(bot, user)
+                }
+                bot.execute(AnswerCallbackQuery().apply { callbackQueryId = update.callbackQuery.id })
+            }
+
+            data == "SEARCH_START_NEW" -> {
+                startNewSearch(bot, user)
+                bot.execute(AnswerCallbackQuery().apply { callbackQueryId = update.callbackQuery.id })
             }
 
             data == "MAIN_MENU" -> {
@@ -592,5 +662,19 @@ class UpdateHandler(
         bot.execute(SendMessage(user.id.toString(), "Кого ищем?").apply {
             replyMarkup = InlineKeyboardMarkup(buttons)
         })
+    }
+
+    private fun startNewSearch(bot: TelegramLongPollingBot, user: User) {
+        user.searchCityId = null
+        user.searchCountryId = null
+        user.searchAgeMin = null
+        user.searchAgeMax = null
+        user.searchGender = null
+        user.searchDateStart = null
+        user.searchDateEnd = null
+        user.state = "SEARCH_WAITING_LOCATION"
+        userRepository.save(user)
+
+        bot.execute(SendMessage(user.id.toString(), "Куда едем? Введите город или страну:"))
     }
 }

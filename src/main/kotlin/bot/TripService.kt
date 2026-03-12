@@ -83,10 +83,7 @@ class TripService(
     // В TripService.kt
 
     fun parseStrictDates(text: String): Pair<java.time.LocalDate, java.time.LocalDate>? {
-        // Убираем все пробелы, чтобы "01. 01. 2026" тоже работало
-        val cleanText = text.replace(" ", "").trim()
-
-        // Регулярное выражение: ДД.ММ.ГГГГ-ДД.ММ.ГГГГ
+        val cleanText = text.replace(" ", "").replace("—", "-").trim()
         val regex = Regex("""^(\d{2}\.\d{2}\.\d{4})-(\d{2}\.\d{2}\.\d{4})$""")
         val match = regex.find(cleanText) ?: return null
 
@@ -96,11 +93,22 @@ class TripService(
             val end = java.time.LocalDate.parse(match.groupValues[2], formatter)
 
             val today = java.time.LocalDate.now()
+            val maxFutureDate = today.plusYears(1) // Ограничение: 1 год вперед
 
-            // ЛОГИЧЕСКАЯ ПРОВЕРКА:
-            // 1. Дата начала не может быть сильно в прошлом (допустим, сегодня или позже)
-            // 2. Дата окончания не может быть раньше начала
+            // 1. Базовая проверка порядка дат
             if (start.isBefore(today.minusDays(1)) || end.isBefore(start)) {
+                return null
+            }
+
+            // 2. Проверка горизонта планирования (не далее 1 года вперед)
+            if (start.isAfter(maxFutureDate)) {
+                // Можно кидать кастомную ошибку или просто возвращать null
+                return null
+            }
+
+            // 3. Проверка длительности периода (не более 90 дней)
+            val daysBetween = java.time.temporal.ChronoUnit.DAYS.between(start, end)
+            if (daysBetween > 90) {
                 return null
             }
 
