@@ -42,4 +42,10 @@ interface TripRepository : JpaRepository<Trip, Long> {
         @Param("searchStart") searchStart: java.time.LocalDate,
         @Param("searchEnd") searchEnd: java.time.LocalDate
     ): List<User>
+
+    @Query("SELECT MAX(t.id) FROM Trip t")
+    fun findMaxId(): Long?
+
+    // Также убедись, что у тебя есть этот метод для вывода списка
+    fun findByUser(user: User): List<Trip>
 }

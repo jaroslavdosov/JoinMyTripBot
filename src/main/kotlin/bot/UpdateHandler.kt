@@ -10,9 +10,11 @@ import org.springframework.stereotype.Component
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageReplyMarkup
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText
 import java.time.LocalDate
 
 @Component
@@ -22,7 +24,8 @@ class UpdateHandler(
     private val cityRepository: CityRepository,
     private val countryRepository: CountryRepository,
     private val tripService: TripService,
-    private val messageFactory: MessageFactory
+    private val messageFactory: MessageFactory,
+
 ) {
     fun handleUpdate(update: Update, bot: TelegramLongPollingBot) {
         val chatId = extractChatId(update) ?: return
@@ -68,7 +71,7 @@ class UpdateHandler(
             }
             // НОВАЯ ЛОГИКА ТУТ:
             "✈️ Мои планы" -> {
-                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+                showMyTrips(chatId, user, bot)
                 return
             }
 
@@ -100,6 +103,68 @@ class UpdateHandler(
         val chatId = user.id
 
         when (user.state) {
+
+            "WAITING_NOTIF_AGE" -> {
+                val text = message.text ?: ""
+                val regex = Regex("""(\d+)\s*-\s*(\d+)""")
+                val match = regex.find(text)
+
+                if (match != null) {
+                    try {
+                        val (minStr, maxStr) = match.destructured
+                        var minVal = minStr.toInt()
+                        var maxVal = maxStr.toInt()
+
+                        // 1. Корректировка порядка (если ввели 30-20)
+                        if (minVal > maxVal) {
+                            val temp = minVal
+                            minVal = maxVal
+                            maxVal = temp
+                        }
+
+                        // 2. Валидация
+                        if (minVal < 18 || maxVal > 100) {
+                            bot.execute(SendMessage(chatId.toString(), "🔞 Возраст должен быть от 18 до 100 лет."))
+                            return
+                        }
+
+                        val tripId = user.editingTripId
+                        if (tripId != null) {
+                            // 3. Загружаем свежий объект из БД
+                            val trip = tripRepository.findById(tripId).orElse(null)
+                            if (trip != null) {
+                                // КРИТИЧНО: Присваиваем новые значения полям
+                                trip.prefAgeMin = minVal
+                                trip.prefAgeMax = maxVal
+
+                                // 4. Сохраняем поездку
+                                tripRepository.save(trip)
+
+                                // 5. Синхронизируем объект в списке пользователя (чтобы сразу видеть изменения)
+                                user.trips.find { it.id == tripId }?.apply {
+                                    this.prefAgeMin = minVal
+                                    this.prefAgeMax = maxVal
+                                }
+
+                                // 6. Сбрасываем стейт и сохраняем юзера
+                                user.state = "MAIN_MENU"
+                                user.editingTripId = null
+                                userRepository.save(user)
+
+                                val markup = InlineKeyboardMarkup(listOf(
+                                    listOf(InlineKeyboardButton("✈️ Вернуться к списку планов").apply { callbackData = "MY_TRIPS" })
+                                ))
+                                bot.execute(SendMessage(chatId.toString(), "✅ Возраст для поиска попутчиков обновлен: $minVal-$maxVal").apply { replyMarkup = markup })
+                            }
+                        }
+                    } catch (e: Exception) {
+                        bot.execute(SendMessage(chatId.toString(), "⚠️ Ошибка при вводе чисел."))
+                    }
+                } else {
+                    bot.execute(SendMessage(chatId.toString(), "⚠️ Неверный формат! Пришлите диапазон, например: 25-40"))
+                }
+            }
+
             // В handleCallback
             "START_SEARCH_AGAIN" -> {
                 user.state = "SEARCH_WAITING_LOCATION"
@@ -192,7 +257,7 @@ class UpdateHandler(
                             1. Формат: `дд.мм.гггг-дд.мм.гггг`
                             2. Поездка не должна быть в прошлом.
                             3. Планировать можно максимум на *1 год вперед*.
-                            4. Длительность поездки — не более *3 месяцев*.
+                            4. Длительность поездки - не более *3 месяцев*.
                         """.trimIndent())
                 } else {
                     user.searchDateStart = dates.first
@@ -309,7 +374,7 @@ class UpdateHandler(
                         2. Дата начала не может быть раньше $today
                         3. Дата окончания не может быть раньше даты начала.
                         4. Планировать можно максимум на *1 год вперед*.
-                        5. Длительность поездки — не более *3 месяцев*.
+                        5. Длительность поездки - не более *3 месяцев*.
                     """.trimIndent()
 
                     bot.execute(SendMessage(user.id.toString(), errorMsg).apply { parseMode = "Markdown" })
@@ -350,6 +415,119 @@ class UpdateHandler(
         val callbackId = update.callbackQuery.id
 
         when {
+
+            // Добавить внутри when в handleCallback
+            data.startsWith("BACK_TO_TRIP_CARD_") -> {
+                val tripId = data.removePrefix("BACK_TO_TRIP_CARD_").toLong()
+                val trip = tripRepository.findById(tripId).orElse(null) ?: return
+
+                val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: "Неизвестно"
+
+                bot.execute(EditMessageText().apply {
+                    this.chatId = chatId.toString()
+                    this.messageId = update.callbackQuery.message.messageId
+                    this.text = """
+            📍 *Поездка в $destination*
+            📅 ${trip.travelStart} - ${trip.travelEnd}
+            
+            Настройки уведомлений:
+            🚻 Пол: ${getGenderEmoji(trip.prefGender)}
+            🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
+            🔔 Статус: ${if(trip.notificationsEnabled) "Активны" else "Выключены"}
+        """.trimIndent()
+                    this.parseMode = "Markdown"
+                    this.replyMarkup = createTripManagementMarkup(trip)
+                })
+            }
+
+            data.startsWith("TRIP_SETTINGS_") -> {
+                val tripId = data.split("_").last().toLong()
+                openTripSettings(chatId, update.callbackQuery.message.messageId, tripId, bot)
+            }
+
+            data.startsWith("TRIP_QUICK_ENABLE_") -> {
+                val tripId = data.split("_").last().toLong()
+                val trip = tripRepository.findById(tripId).get()
+
+                // Включаем уведомления
+                trip.notificationsEnabled = true
+                trip.lastSeenTripId = tripRepository.findMaxId() ?: 0L
+                tripRepository.save(trip)
+
+                // Отвечаем пользователю
+                bot.execute(AnswerCallbackQuery().apply {
+                    callbackQueryId = update.callbackQuery.id
+                    text = "✅ Уведомления включены!"
+                })
+
+                // Обновляем само сообщение со списком, чтобы кнопка сменилась на "Настроить"
+                bot.execute(EditMessageReplyMarkup().apply {
+                    this.chatId = chatId.toString()
+                    messageId = update.callbackQuery.message.messageId
+                    replyMarkup = createTripManagementMarkup(trip)
+                })
+            }
+
+            data.startsWith("TRIP_TOGGLE_NOTIF_") -> {
+                val tripId = data.split("_").last().toLong()
+                val trip = tripRepository.findById(tripId).get()
+
+                trip.notificationsEnabled = false
+                tripRepository.save(trip)
+
+                bot.execute(AnswerCallbackQuery().apply {
+                    callbackQueryId = update.callbackQuery.id
+                    text = "🔕 Уведомления выключены"
+                })
+
+                val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: "Неизвестно"
+                bot.execute(EditMessageText().apply {
+                    this.chatId = chatId.toString()
+                    messageId = update.callbackQuery.message.messageId
+                    text = """
+                    📍 *Поездка в $destination*
+                    📅 ${trip.travelStart} - ${trip.travelEnd}
+                    
+                    Настройки уведомлений:
+                    🚻 Пол: ${getGenderEmoji(trip.prefGender)}
+                    🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
+                    🔔 Статус: Выключены
+                """.trimIndent()
+                    parseMode = "Markdown"
+                    replyMarkup = createTripManagementMarkup(trip)
+                })
+            }
+
+            data.startsWith("EDIT_NOTIF_GENDER_") -> {
+                val tripId = data.split("_").last().toLong()
+                val trip = tripRepository.findById(tripId).get()
+
+                // Циклично меняем: ALL -> MALE -> FEMALE -> ALL
+                trip.prefGender = when (trip.prefGender) {
+                    "ALL" -> "MALE"
+                    "MALE" -> "FEMALE"
+                    else -> "ALL"
+                }
+                tripRepository.save(trip)
+                openTripSettings(chatId, update.callbackQuery.message.messageId, tripId, bot)
+            }
+
+            data.startsWith("EDIT_NOTIF_AGE_") -> {
+                val tripId = data.split("_").last().toLong()
+                val user = userRepository.findById(chatId).get()
+
+                user.state = "WAITING_NOTIF_AGE"
+                user.editingTripId = tripId
+                userRepository.save(user)
+
+                bot.execute(SendMessage(chatId.toString(), "Введите желаемый диапазон возраста через дефис (например, *20-35*):")
+                    .apply { parseMode = "Markdown" })
+            }
+
             data.startsWith("SEARCH_NEXT_") -> {
                 val nextIndex = data.removePrefix("SEARCH_NEXT_").toInt()
                 // Вызываем поиск снова, но передаем индекс, чтобы показать следующего
@@ -373,19 +551,7 @@ class UpdateHandler(
                 messageFactory.sendFullProfile(bot, user)
             }
 
-            data.startsWith("CONFIRM_DELETE_") -> {
-                val tripId = data.removePrefix("CONFIRM_DELETE_").toLong()
-                bot.execute(messageFactory.createDeleteConfirmation(chatId, tripId))
-            }
 
-            data.startsWith("DELETE_FINAL_") -> {
-                val tripId = data.removePrefix("DELETE_FINAL_").toLong()
-                tripRepository.deleteById(tripId)
-                user.trips.removeIf { it.id == tripId }
-                userRepository.save(user)
-                // Возвращаемся к списку
-                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
-            }
 
             data.startsWith("SEARCH_SELECT_COUNTRY_") -> {
                 val countryId = data.removePrefix("SEARCH_SELECT_COUNTRY_").toLong()
@@ -399,6 +565,11 @@ class UpdateHandler(
                 user.searchCityId = cityId
                 user.searchCountryId = null // Сбрасываем страну
                 goToGenderSelection(bot, user)
+            }
+
+            data == "MY_TRIPS" -> {
+                showMyTrips(chatId, user, bot)
+
             }
 
 
@@ -437,7 +608,7 @@ class UpdateHandler(
                     bot.execute(SendMessage(user.id.toString(), """
             🚀 *Ищу по вашим фильтрам:*
             📍 Место: *$locationName*
-            📅 Даты: $dateStart — $dateEnd
+            📅 Даты: $dateStart - $dateEnd
             👥 Возраст: ${user.searchAgeMin}-${user.searchAgeMax} лет
             🚻 Пол: $genderDisplay
         """.trimIndent()).apply { parseMode = "Markdown" })
@@ -467,7 +638,7 @@ class UpdateHandler(
             data == "ADD_TRIP" -> {
                 user.state = "WAITING_FOR_DESTINATION"
                 userRepository.save(user)
-                sendText(bot, chatId, "Куда едем? (Город или страна)")
+                bot.execute(SendMessage(chatId.toString(), "Куда планируешь поехать? Напиши город или страну."))
             }
 
             data == "EDIT_HOME_CITY" -> {
@@ -505,21 +676,66 @@ class UpdateHandler(
                 bot.execute(AnswerCallbackQuery().apply { callbackQueryId = update.callbackQuery.id })
             }
 
+            // 1. ПЕРВОЕ НАЖАТИЕ: Показываем кнопки подтверждения
             data.startsWith("DELETE_TRIP_") -> {
                 val tripId = data.removePrefix("DELETE_TRIP_").toLong()
-                tripRepository.deleteById(tripId)
 
-                // Обновляем список пользователя в памяти и БД
-                user.trips.removeIf { it.id == tripId }
-                userRepository.save(user)
+                bot.execute(EditMessageReplyMarkup().apply {
+                    this.chatId = chatId.toString()
+                    this.messageId = update.callbackQuery.message.messageId
+                    this.replyMarkup = InlineKeyboardMarkup(listOf(
+                        listOf(
+                            InlineKeyboardButton("✅ Да, удалить").apply { callbackData = "CONFIRM_DELETE_FINAL_$tripId" },
+                            InlineKeyboardButton("🚫 Отмена").apply { callbackData = "CANCEL_DELETE_$tripId" }
+                        )
+                    ))
+                })
+            }
 
-                // Уведомляем пользователя (всплывающее окно в Telegram)
-                bot.execute(org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery(callbackId).apply {
-                    text = "Поездка удалена"
+// 2. ОТМЕНА: Возвращаем обычные кнопки управления
+            data.startsWith("CANCEL_DELETE_") -> {
+                val tripId = data.removePrefix("CANCEL_DELETE_").toLong()
+                val trip = tripRepository.findById(tripId).orElse(null) ?: return
+
+                bot.execute(EditMessageReplyMarkup().apply {
+                    this.chatId = chatId.toString()
+                    this.messageId = update.callbackQuery.message.messageId
+                    this.replyMarkup = createTripManagementMarkup(trip)
+                })
+            }
+
+// 3. ФИНАЛЬНОЕ УДАЛЕНИЕ: Ошибка была здесь
+            data.startsWith("CONFIRM_DELETE_FINAL_") -> {
+                val tripId = data.removePrefix("CONFIRM_DELETE_FINAL_").toLong()
+
+                // 1. Ищем поездку в списке юзера и удаляем её из коллекции
+                val tripToRemove = user.trips.find { it.id == tripId }
+                if (tripToRemove != null) {
+                    user.trips.remove(tripToRemove)
+                    // 2. Удаляем физически из БД через репозиторий
+                    tripRepository.delete(tripToRemove)
+                    // 3. Сохраняем состояние юзера, чтобы Hibernate обновил связи
+                    userRepository.save(user)
+                }
+
+                bot.execute(AnswerCallbackQuery().apply {
+                    callbackQueryId = update.callbackQuery.id
+                    text = "🗑 Поездка успешно удалена"
                 })
 
-                // Перерисовываем список планов
-                bot.execute(messageFactory.createTripsList(chatId, user.trips, user.languageCode))
+                // Удаляем сообщение из чата
+                try {
+                    bot.execute(org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage().apply {
+                        this.chatId = chatId.toString()
+                        this.messageId = update.callbackQuery.message.messageId
+                    })
+                } catch (e: Exception) {
+                    bot.execute(EditMessageText().apply {
+                        this.chatId = chatId.toString()
+                        this.messageId = update.callbackQuery.message.messageId
+                        this.text = "❌ Поездка удалена."
+                    })
+                }
             }
 
             data == "ADD_TRIP" -> {
@@ -676,5 +892,134 @@ class UpdateHandler(
         userRepository.save(user)
 
         bot.execute(SendMessage(user.id.toString(), "Куда едем? Введите город или страну:"))
+    }
+
+    private fun openTripSettings(chatId: Long, messageId: Int, tripId: Long, bot: TelegramLongPollingBot) {
+        val trip = tripRepository.findById(tripId).orElse(null) ?: return
+
+        val destination = trip.city?.name ?: trip.country?.name ?: "Неизвестно"
+
+        val text = """
+            ⚙️ *Настройка уведомлений*
+            📍 Маршрут: $destination
+            
+            🚻 Пол: *${getGenderEmoji(trip.prefGender)}*
+            🔞 Возраст: *${trip.prefAgeMin} - ${trip.prefAgeMax}*
+        """.trimIndent()
+
+        val keyboard = InlineKeyboardMarkup(listOf(
+            listOf(InlineKeyboardButton("🚻 Сменить пол").apply { callbackData = "EDIT_NOTIF_GENDER_$tripId" }),
+            listOf(InlineKeyboardButton("🔢 Сменить возраст").apply { callbackData = "EDIT_NOTIF_AGE_$tripId" }),
+            listOf(InlineKeyboardButton("🔕 Выключить уведомления").apply { callbackData = "TRIP_TOGGLE_NOTIF_$tripId" }),
+            // ИЗМЕНЕНО: теперь ведет на специальный обработчик "сворачивания"
+            listOf(InlineKeyboardButton("🔙 Назад к списку").apply { callbackData = "BACK_TO_TRIP_CARD_$tripId" })
+        ))
+
+        bot.execute(EditMessageText().apply {
+            this.chatId = chatId.toString()
+            this.messageId = messageId
+            this.text = text
+            this.parseMode = "Markdown"
+            this.replyMarkup = keyboard
+        })
+    }
+
+    private fun createTripManagementMarkup(trip: Trip): InlineKeyboardMarkup {
+        val button = if (!trip.notificationsEnabled) {
+            // Если выключены - кнопка прямого включения
+            InlineKeyboardButton("🔔 Включить уведомления").apply {
+                callbackData = "TRIP_QUICK_ENABLE_${trip.id}"
+            }
+        } else {
+            // Если включены - кнопка перехода в настройки
+            InlineKeyboardButton("⚙️ Настроить уведомления").apply {
+                callbackData = "TRIP_SETTINGS_${trip.id}"
+            }
+        }
+
+        return InlineKeyboardMarkup(listOf(
+            listOf(button),
+            listOf(InlineKeyboardButton("❌ Удалить").apply { callbackData = "DELETE_TRIP_${trip.id}" })
+        ))
+    }
+
+    private fun getGenderEmoji(gender: String?): String {
+        return when (gender) {
+            "MALE" -> "👨 Мужской"
+            "FEMALE" -> "👩 Женский"
+            else -> "👫 Любой"
+        }
+    }
+
+    private fun sendTripSettingsAsNewMessage(chatId: Long, tripId: Long, bot: TelegramLongPollingBot) {
+        val trip = tripRepository.findById(tripId).orElse(null) ?: return
+
+        // Используем ваш метод для получения русского названия и смайликов
+        val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+            ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+            ?: "Неизвестно"
+
+        val text = """
+        ⚙️ *Настройка уведомлений*
+        📍 Маршрут: $destination
+        
+        🚻 Пол: *${getGenderEmoji(trip.prefGender)}*
+        🔞 Возраст: *${trip.prefAgeMin}- ${trip.prefAgeMax}*
+    """.trimIndent()
+
+        val keyboard = InlineKeyboardMarkup(listOf(
+            listOf(InlineKeyboardButton("🚻 Сменить пол").apply { callbackData = "EDIT_NOTIF_GENDER_$tripId" }),
+            listOf(InlineKeyboardButton("🔢 Сменить возраст").apply { callbackData = "EDIT_NOTIF_AGE_$tripId" }),
+            listOf(InlineKeyboardButton("🔕 Выключить уведомления").apply { callbackData = "TRIP_TOGGLE_NOTIF_$tripId" }),
+            listOf(InlineKeyboardButton("🔙 Назад к списку").apply { callbackData = "MY_TRIPS" })
+        ))
+
+        bot.execute(SendMessage(chatId.toString(), text).apply {
+            parseMode = "Markdown"
+            replyMarkup = keyboard
+        })
+    }
+
+    private fun showMyTrips(chatId: Long, user: User, bot: TelegramLongPollingBot) {
+        val trips = user.trips
+        if (trips.isEmpty()) {
+            val markup = InlineKeyboardMarkup(listOf(
+                listOf(InlineKeyboardButton("➕ Добавить первую поездку").apply { callbackData = "ADD_TRIP" })
+            ))
+            bot.execute(SendMessage(chatId.toString(), "У вас пока нет активных планов. Создадим?").apply { replyMarkup = markup })
+        } else {
+            // Проходим по списку с индексом, чтобы определить последнюю поездку
+            trips.forEachIndexed { index, trip ->
+                val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
+                    ?: "Неизвестно"
+
+                val text = """
+                📍 *Поездка в $destination*
+                📅 ${trip.travelStart} - ${trip.travelEnd}
+                
+                Настройки уведомлений:
+                🚻 Пол: ${getGenderEmoji(trip.prefGender)}
+                🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
+                🔔 Статус: ${if(trip.notificationsEnabled) "Активны" else "Выключены"}
+            """.trimIndent()
+
+                // Если это ПОСЛЕДНЯЯ поездка в списке, добавляем к ней кнопки "Добавить еще" и "Меню"
+                val markup = if (index == trips.size - 1) {
+                    val baseButtons = createTripManagementMarkup(trip).keyboard.toMutableList()
+                    baseButtons.add(listOf(InlineKeyboardButton("➕ Добавить еще одну поездку").apply { callbackData = "ADD_TRIP" }))
+                    baseButtons.add(listOf(InlineKeyboardButton("🏠 В главное меню").apply { callbackData = "MAIN_MENU" }))
+                    InlineKeyboardMarkup(baseButtons)
+                } else {
+                    createTripManagementMarkup(trip)
+                }
+
+                bot.execute(SendMessage(chatId.toString(), text).apply {
+                    parseMode = "Markdown"
+                    replyMarkup = markup
+                })
+            }
+            // Блок bot.execute с сообщением "Хотите запланировать что-то еще?" УДАЛЕН
+        }
     }
 }

@@ -52,5 +52,7 @@ class User(
     var searchAgeMax: Int? = null,
     var searchGender: String? = null, // MALE, FEMALE, ALL
     var searchDateStart: LocalDate? = null,
-    var searchDateEnd: LocalDate? = null
+    var searchDateEnd: LocalDate? = null,
+
+    var editingTripId: Long? = null
 )

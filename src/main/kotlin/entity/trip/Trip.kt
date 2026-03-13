@@ -5,6 +5,7 @@ import org.example.entity.city.City
 import org.example.entity.country.Country
 import org.example.entity.user.User
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 @Entity
 @Table(name = "trips")
@@ -27,5 +28,14 @@ class Trip(
     var travelEnd: LocalDate? = null,
 
     // Оставляем текстовое поле для быстрого отображения (опционально)
-    var destinationName: String? = null
+    var destinationName: String? = null,
+    // Добавь эти поля, если их нет:
+    var prefGender: String = "ALL",
+    var prefAgeMin: Int = 18,
+    var prefAgeMax: Int = 99,
+    var notificationsEnabled: Boolean = false,
+    var lastSeenTripId: Long? = null,
+
+    val createdAt: LocalDateTime = LocalDateTime.now()
+
 )
