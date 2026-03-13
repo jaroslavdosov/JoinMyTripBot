@@ -421,6 +421,11 @@ class UpdateHandler(
                 val tripId = data.removePrefix("BACK_TO_TRIP_CARD_").toLong()
                 val trip = tripRepository.findById(tripId).orElse(null) ?: return
 
+                // ДОБАВИТЬ ФОРМАТТЕР И СТРОКИ:
+                val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+                val startStr = trip.travelStart?.format(dateFormatter) ?: ""
+                val endStr = trip.travelEnd?.format(dateFormatter) ?: ""
+
                 val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
                     ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
                     ?: "Неизвестно"
@@ -430,7 +435,7 @@ class UpdateHandler(
                     this.messageId = update.callbackQuery.message.messageId
                     this.text = """
             📍 *Поездка в $destination*
-            📅 ${trip.travelStart} - ${trip.travelEnd}
+            📅 $startStr - $endStr
             
             Настройки уведомлений:
             🚻 Пол: ${getGenderEmoji(trip.prefGender)}
@@ -477,6 +482,11 @@ class UpdateHandler(
                 trip.notificationsEnabled = false
                 tripRepository.save(trip)
 
+                // ДОБАВИТЬ ФОРМАТТЕР И СТРОКИ:
+                val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+                val startStr = trip.travelStart?.format(dateFormatter) ?: ""
+                val endStr = trip.travelEnd?.format(dateFormatter) ?: ""
+
                 bot.execute(AnswerCallbackQuery().apply {
                     callbackQueryId = update.callbackQuery.id
                     text = "🔕 Уведомления выключены"
@@ -489,14 +499,14 @@ class UpdateHandler(
                     this.chatId = chatId.toString()
                     messageId = update.callbackQuery.message.messageId
                     text = """
-                    📍 *Поездка в $destination*
-                    📅 ${trip.travelStart} - ${trip.travelEnd}
-                    
-                    Настройки уведомлений:
-                    🚻 Пол: ${getGenderEmoji(trip.prefGender)}
-                    🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
-                    🔔 Статус: Выключены
-                """.trimIndent()
+        📍 *Поездка в $destination*
+        📅 $startStr - $endStr
+        
+        Настройки уведомлений:
+        🚻 Пол: ${getGenderEmoji(trip.prefGender)}
+        🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
+        🔔 Статус: Выключены
+    """.trimIndent()
                     parseMode = "Markdown"
                     replyMarkup = createTripManagementMarkup(trip)
                 })
@@ -989,20 +999,26 @@ class UpdateHandler(
             bot.execute(SendMessage(chatId.toString(), "У вас пока нет активных планов. Создадим?").apply { replyMarkup = markup })
         } else {
             // Проходим по списку с индексом, чтобы определить последнюю поездку
+            val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy") // Добавить
+
             trips.forEachIndexed { index, trip ->
                 val destination = trip.city?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
                     ?: trip.country?.let { tripService.getTranslatedName(it.translations, it.name, "ru") }
                     ?: "Неизвестно"
 
+                // ЗАМЕНИТЬ ФОРМАТ ТУТ:
+                val startStr = trip.travelStart?.format(dateFormatter) ?: ""
+                val endStr = trip.travelEnd?.format(dateFormatter) ?: ""
+
                 val text = """
-                📍 *Поездка в $destination*
-                📅 ${trip.travelStart} - ${trip.travelEnd}
-                
-                Настройки уведомлений:
-                🚻 Пол: ${getGenderEmoji(trip.prefGender)}
-                🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
-                🔔 Статус: ${if(trip.notificationsEnabled) "Активны" else "Выключены"}
-            """.trimIndent()
+                    📍 *Поездка в $destination*
+                    📅 $startStr - $endStr
+                    
+                    Настройки уведомлений:
+                    🚻 Пол: ${getGenderEmoji(trip.prefGender)}
+                    🔞 Возраст: ${trip.prefAgeMin}-${trip.prefAgeMax}
+                    🔔 Статус: ${if(trip.notificationsEnabled) "Активны" else "Выключены"}
+                """.trimIndent()
 
                 // Если это ПОСЛЕДНЯЯ поездка в списке, добавляем к ней кнопки "Добавить еще" и "Меню"
                 val markup = if (index == trips.size - 1) {
