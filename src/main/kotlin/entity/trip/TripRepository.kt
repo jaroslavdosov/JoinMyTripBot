@@ -48,4 +48,32 @@ interface TripRepository : JpaRepository<Trip, Long> {
 
     // Также убедись, что у тебя есть этот метод для вывода списка
     fun findByUser(user: User): List<Trip>
+
+    // Поиск совпадений для конкретной поездки
+    @Query("""
+            SELECT t FROM Trip t 
+            WHERE t.user.id != :currentUserId
+            AND t.id > :lastSeenId
+            AND (
+                (:cityId IS NOT NULL AND t.city.id = :cityId) 
+                OR 
+                (:countryId IS NOT NULL AND (t.country.id = :countryId OR t.city.country.id = :countryId))
+            )
+            AND t.user.isActive = true
+            AND (:gender = 'ALL' OR t.user.gender = :gender)
+            AND t.user.age BETWEEN :minAge AND :maxAge
+            AND t.travelStart <= :searchEnd 
+            AND t.travelEnd >= :searchStart
+        """)
+    fun findNewMatches(
+        @Param("cityId") cityId: Long?,
+        @Param("countryId") countryId: Long?,
+        @Param("currentUserId") currentUserId: Long,
+        @Param("gender") gender: String,
+        @Param("minAge") minAge: Int,
+        @Param("maxAge") maxAge: Int,
+        @Param("searchStart") searchStart: LocalDate,
+        @Param("searchEnd") searchEnd: LocalDate,
+        @Param("lastSeenId") lastSeenId: Long
+    ): List<Trip>
 }

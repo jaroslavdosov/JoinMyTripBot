@@ -12,22 +12,22 @@ class UserService(private val userRepository: UserRepository) {
         name: String,
         gender: String,
         description: String,
-        userName: String,
+        userName: String?, // Сделайте его nullable, так как не у всех есть username
         age: Int,
         lastNotifiedAt: java.time.LocalDateTime,
         isActive: Boolean,
         state: String): User {
 
         val newUser = User(
+            id = id,
             name = name,
             gender = gender,
             description = description,
-            userName = userName,
+            userName = userName, // Проверьте, что здесь не пустая строка ""
             age = age,
             lastNotifiedAt = lastNotifiedAt,
             isActive = isActive,
-            state = state,
-            id = id)
+            state = state)
         return userRepository.save(newUser)
     }
 }

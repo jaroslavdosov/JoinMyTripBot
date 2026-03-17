@@ -28,9 +28,39 @@ class UpdateHandler(
 
 ) {
     fun handleUpdate(update: Update, bot: TelegramLongPollingBot) {
+        if (update.hasMyChatMember()) {
+            val chatMemberUpdate = update.myChatMember
+            val chatId = chatMemberUpdate.chat.id
+            val newStatus = chatMemberUpdate.newChatMember.status
+
+            userRepository.findById(chatId).ifPresent { user ->
+                if (newStatus == "kicked") {
+                    // Юзер заблокировал бота
+                    user.isActive = false
+                    userRepository.save(user)
+                    println(">>> Юзер $chatId заблокировал бота. Статус: isActive = false")
+                } else if (newStatus == "member") {
+                    // Юзер разблокировал бота
+                    user.isActive = true
+                    userRepository.save(user)
+                    println(">>> Юзер $chatId разблокировал бота. Статус: isActive = true")
+                }
+            }
+            return // Дальше обновление обрабатывать не нужно
+        }
+
+
         val chatId = extractChatId(update) ?: return
+        val telegramUser = update.message?.from ?: update.callbackQuery?.from
+        val username = telegramUser?.userName // Это поле из библиотеки Telegram
+
         val user = userRepository.findById(chatId).orElseGet {
-            val newUser = User(id = chatId, userName = extractUserName(update))
+            val newUser = User(
+                id = chatId,
+                name = telegramUser?.firstName ?: "Путешественник",
+                userName = username, // Убедитесь, что это значение передается сюда
+                state = "START"
+            )
             userRepository.save(newUser)
         }
 
@@ -298,7 +328,11 @@ class UpdateHandler(
             }
 
             "WAITING_FOR_NAME" -> {
+                val telegramUser = message.from
+                val username = telegramUser?.userName
+
                 user.name = messageText
+                user.userName = username
                 user.state = "WAITING_FOR_AGE"
                 userRepository.save(user)
                 sendText(bot, chatId, "Сколько тебе лет?")
