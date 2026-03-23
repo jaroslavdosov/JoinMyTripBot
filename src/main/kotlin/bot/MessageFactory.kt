@@ -98,13 +98,13 @@ class MessageFactory(
 
         // Текст профиля (убедись, что нет пробелов перед $tripsInfo)
         val profileText = """
-$genderIcon *${user.name}, ${user.age}* | 🏠 $homeCity
-📝 ${user.bio ?: "_Био не заполнено_"}
-
-✈️ *Планы:*
-$tripsInfo
-
-Статус: $status
+            $genderIcon *${user.name}, ${user.age}* | 🏠 $homeCity
+            📝 ${user.bio ?: "_Био не заполнено_"}
+            
+            ✈️ *Планы:*
+            $tripsInfo
+            
+            Статус: $status
     """.trimIndent()
 
         val markup = InlineKeyboardMarkup(listOf(

@@ -58,15 +58,20 @@ class NotificationService(
             ?: "маршрут"
 
         val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")
+        val homeCityName = companion.homeCity?.let {
+            tripService.getTranslatedName(it.translations, it.name, "ru")
+        } ?: "Не указан"
+
         val messageText = """
             🔔 *Новое совпадение!*
             Для вашей поездки в $destination найден попутчик:
             
             👤 *${companion.name ?: "Без имени"}, ${companion.age ?: "?"} лет*
             🚻 Пол: ${if (companion.gender == "MALE") "Мужской" else "Женский"}
+            🏠 Город проживания: $homeCityName
             ℹ️ О себе: ${companion.bio ?: "Не заполнено"}
             
-           📅 Даты попутчика: ${match.travelStart?.format(dateFormatter)} - ${match.travelEnd?.format(dateFormatter)}
+           📅 Даты поездки: ${match.travelStart?.format(dateFormatter)} - ${match.travelEnd?.format(dateFormatter)}
                 """.trimIndent()
 
         val keyboard = InlineKeyboardMarkup(listOf(
