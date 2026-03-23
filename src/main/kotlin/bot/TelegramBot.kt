@@ -29,7 +29,12 @@ class TelegramBot(
 
     @PostConstruct
     fun init() {
-        val commands = listOf(BotCommand("/start", "Сброс"), BotCommand("/menu", "Меню"))
+        val commands = listOf(
+            BotCommand("/start", "Сброс"),
+            BotCommand("/menu", "Меню"),
+            BotCommand("/help", "Помощь и поддержка")
+
+        )
         execute(SetMyCommands(commands, BotCommandScopeDefault(), null))
     }
 }

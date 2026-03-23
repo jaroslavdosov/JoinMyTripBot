@@ -99,7 +99,12 @@ class UpdateHandler(
                 bot.execute(messageFactory.createMainMenu(chatId, "Главное меню:"))
                 return
             }
-            // НОВАЯ ЛОГИКА ТУТ:
+
+            "/help" -> { // НОВАЯ ЛОГИКА
+                sendHelpMessage(chatId, bot)
+                return
+            }
+
             "✈️ Мои планы" -> {
                 showMyTrips(chatId, user, bot)
                 return
@@ -1167,5 +1172,33 @@ class UpdateHandler(
         keyboard.add(listOf(InlineKeyboardButton("➕ Добавить еще одну поездку").apply { callbackData = "ADD_TRIP" }))
         keyboard.add(listOf(InlineKeyboardButton("🏠 В главное меню").apply { callbackData = "MAIN_MENU" }))
         return InlineKeyboardMarkup(keyboard)
+    }
+
+    private fun sendHelpMessage(chatId: Long, bot: TelegramLongPollingBot) {
+        val helpText = """
+            🆘 *Помощь и поддержка*
+            
+            Если у вас есть вопросы или предложения по работе бота, пожалуйста, пишите нам на почту:
+            📧 *joinmytripsupport@gmail.com*
+            
+             Мы обязательно вам ответим!
+        """.trimIndent()
+
+        val markup = InlineKeyboardMarkup(listOf(
+            listOf(
+                InlineKeyboardButton("🏠 К меню").apply {
+                    callbackData = "MAIN_MENU"
+                }
+            )
+        ))
+
+        val sendMessage = SendMessage().apply {
+            setChatId(chatId.toString())
+            text = helpText
+            parseMode = "Markdown"
+            replyMarkup = markup
+        }
+
+        bot.execute(sendMessage)
     }
 }
