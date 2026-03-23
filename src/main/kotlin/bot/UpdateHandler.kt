@@ -89,8 +89,18 @@ class UpdateHandler(
                 }
                 userRepository.save(newUser)
 
-                // 3. Сразу отправляем первый вопрос
-                bot.execute(SendMessage(newUser.id.toString(), "Привет! Давай создадим профиль с нуля. Как тебя зовут?"))
+                val welcomeText = """
+    👋 <b>Привет! Я JoinMyTrip.</b> Помогу найти компанию для твоих путешествий. 🌍
+    
+    ⚠️ Продолжая, ты принимаешь <a href="https://telegra.ph/Pravila-ispolzovaniya-i-politika-konfidencialnosti-JoinMyTrip-03-23">правила и политику конфиденциальности</a>.
+
+    <b>Как тебя зовут?</b>
+""".trimIndent()
+
+                bot.execute(SendMessage(newUser.id.toString(), welcomeText).apply {
+                    parseMode = "HTML"
+                    disableWebPagePreview = false // Чтобы Instant View подгрузился сразу
+                })
                 return
             }
             "/menu" -> {
@@ -102,6 +112,11 @@ class UpdateHandler(
 
             "/help" -> { // НОВАЯ ЛОГИКА
                 sendHelpMessage(chatId, bot)
+                return
+            }
+
+            "/policy" -> { // НОВАЯ ЛОГИКА
+                sendPolicyMessage(chatId, bot)
                 return
             }
 
@@ -1200,5 +1215,36 @@ class UpdateHandler(
         }
 
         bot.execute(sendMessage)
+    }
+
+    private fun sendPolicyMessage(chatId: Long, bot: TelegramLongPollingBot) {
+        val text = """
+        📄 *Правила и конфиденциальность*
+        
+        Перед использованием бота, пожалуйста, ознакомьтесь с нашими правилами и политикой обработки данных. 
+        
+        Использование бота означает ваше полное согласие с данными условиями.
+    """.trimIndent()
+
+        val markup = InlineKeyboardMarkup(listOf(
+            listOf(
+                // Кнопка-ссылка на твою статью
+                InlineKeyboardButton("📖 Читать правила").apply {
+                    url = "https://telegra.ph/Pravila-ispolzovaniya-i-politika-konfidencialnosti-JoinMyTrip-03-23"
+                }
+            ),
+            listOf(
+                InlineKeyboardButton("🏠 К меню").apply {
+                    callbackData = "MAIN_MENU"
+                }
+            )
+        ))
+
+        bot.execute(SendMessage().apply {
+            setChatId(chatId.toString())
+            this.text = text
+            parseMode = "Markdown"
+            replyMarkup = markup
+        })
     }
 }

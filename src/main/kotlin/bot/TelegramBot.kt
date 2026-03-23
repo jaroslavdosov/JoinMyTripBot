@@ -32,6 +32,7 @@ class TelegramBot(
         val commands = listOf(
             BotCommand("/start", "Сброс"),
             BotCommand("/menu", "Меню"),
+            BotCommand("/policy", "Правила и конфиденциальность"),
             BotCommand("/help", "Помощь и поддержка")
 
         )
