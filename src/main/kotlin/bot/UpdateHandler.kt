@@ -247,8 +247,8 @@ class UpdateHandler(
 
             "SEARCH_WAITING_LOCATION" -> {
                 val query = message.text
-                val cities = cityRepository.searchCities(query).take(4)
-                val countries = countryRepository.searchCountries(query).take(3) // Предположим, у вас есть countryRepository
+                val cities = cityRepository.searchCities(query).take(5)
+                val countries = countryRepository.searchCountries(query).take(4) // Предположим, у вас есть countryRepository
 
                 if (cities.isEmpty() && countries.isEmpty()) {
                     bot.execute(SendMessage(user.id.toString(), "🔍 Ничего не найдено. Попробуйте другое название:"))
@@ -406,7 +406,7 @@ class UpdateHandler(
                     bot.execute(SendMessage(user.id.toString(), "🔍 Город не найден. Попробуй ввести название иначе:"))
                 } else {
                     // Создаем кнопки для выбора конкретного города из результатов поиска
-                    val buttons = cities.take(12).map { city ->
+                    val buttons = cities.take(10).map { city ->
                         val label = tripService.getFormattedDestinationForSearch(city, null, user.languageCode)
                         listOf(InlineKeyboardButton(label).apply { callbackData = "SET_HOME_CITY_${city.id}" })
                     }
