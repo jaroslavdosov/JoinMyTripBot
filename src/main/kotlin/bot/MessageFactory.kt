@@ -228,7 +228,7 @@ class MessageFactory(
                 // 2. Формируем СТРОГИЙ формат даты
                 val start = trip.travelStart?.format(fullDateFormatter) ?: "??.??.????"
                 val end = trip.travelEnd?.format(fullDateFormatter) ?: "??.??.????"
-                val dateRange = "`$start-$end`"
+                val dateRange = "$start-$end"
 
                 // 3. Добавляем текст в сообщение (без лишних отступов)
                 text.append("${index + 1}. 📍 *$destination*\n   🗓 $dateRange\n\n")

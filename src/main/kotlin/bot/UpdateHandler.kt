@@ -75,34 +75,56 @@ class UpdateHandler(
         val messageText = update.message.text ?: ""
         val chatId = user.id
 
-        when (messageText) {
-            "/start" -> {
-                // 1. Удаляем старого пользователя, если он есть
-                userRepository.findById(update.message.from.id).ifPresent { existingUser ->
-                    userRepository.delete(existingUser)
-                }
-
-                // 2. Создаем нового "чистого" пользователя
-                val newUser = User(id = update.message.from.id).apply {
-                    state = "WAITING_FOR_NAME" // Устанавливаем первый шаг регистрации
-                    languageCode = update.message.from.languageCode ?: "ru"
-                }
-                userRepository.save(newUser)
-
-                val welcomeText = """
-    👋 <b>Привет! Я JoinMyTrip.</b> Помогу найти компанию для твоих путешествий. 🌍
-    
-    ⚠️ Продолжая, ты принимаешь <a href="https://telegra.ph/Pravila-ispolzovaniya-i-politika-konfidencialnosti-JoinMyTrip-03-23">правила и политику конфиденциальности</a>.
-
-    <b>Как тебя зовут?</b>
-""".trimIndent()
-
-                bot.execute(SendMessage(newUser.id.toString(), welcomeText).apply {
-                    parseMode = "HTML"
-                    disableWebPagePreview = false // Чтобы Instant View подгрузился сразу
-                })
-                return
+        // 1. Команда /start ВСЕГДА должна работать (это сброс)
+        if (messageText == "/start") {
+            // 1. Удаляем старого пользователя, если он есть
+            userRepository.findById(update.message.from.id).ifPresent { existingUser ->
+                userRepository.delete(existingUser)
             }
+
+            // 2. Создаем нового "чистого" пользователя
+            val newUser = User(id = update.message.from.id).apply {
+                state = "WAITING_FOR_NAME" // Устанавливаем первый шаг регистрации
+                languageCode = update.message.from.languageCode ?: "ru"
+            }
+            userRepository.save(newUser)
+
+            val welcomeText = """
+                    👋 <b>Привет!</b> Я помогу найти компанию для твоих путешествий. 🌍
+                    
+                    ⚠️ Продолжая, ты принимаешь <a href="https://telegra.ph/Pravila-ispolzovaniya-i-politika-konfidencialnosti-JoinMyTrip-03-23">правила и политику конфиденциальности</a>.
+                
+                    <b>Как тебя зовут?</b>
+                """.trimIndent()
+
+            bot.execute(SendMessage(newUser.id.toString(), welcomeText).apply {
+                parseMode = "HTML"
+                disableWebPagePreview = false // Чтобы Instant View подгрузился сразу
+            })
+            return
+        }
+
+        // 2. Если пользователь в процессе регистрации, ПРИНУЖДАЕМ его закончить ввод
+        val registrationStates = listOf("WAITING_FOR_NAME", "WAITING_FOR_AGE", "WAITING_FOR_GENDER")
+        if (user.state in registrationStates) {
+            // Если он ввел команду (начинается с /), напоминаем о вводе данных
+            if (messageText.startsWith("/")) {
+                val reminder = when(user.state) {
+                    "WAITING_FOR_NAME" -> "Чтобы продолжить, пожалуйста, напиши сначала своё имя 😊"
+                    "WAITING_FOR_AGE" -> "Пожалуйста, укажи свой возраст цифрами, чтобы завершить настройку."
+                    "WAITING_FOR_GENDER" -> "Чтобы продолжить, пожалуйста, выбери пол."
+                    else -> "Пожалуйста, заверши регистрацию профиля."
+                }
+                sendText(bot, chatId, reminder)
+                return // Блокируем выполнение команд
+            }
+
+            // Если это обычный текст — отправляем в обработку состояний
+            processState(update.message, user, bot)
+            return
+        }
+
+        when (messageText) {
             "/menu" -> {
                 user.state = "MAIN_MENU"
                 userRepository.save(user)
@@ -142,6 +164,7 @@ class UpdateHandler(
                 bot.execute(SendMessage(user.id.toString(), "Выберите режим поиска:").apply {
                     replyMarkup = InlineKeyboardMarkup(horizontalButtons)
                 })
+                return
             }
         }
 
@@ -290,10 +313,10 @@ class UpdateHandler(
                     user.state = "SEARCH_WAITING_DATES"
                     userRepository.save(user)
 
-                    sendText(bot, user.id, "Принято: от $min до $max лет.\nВведи даты в формате `дд.мм.гггг-дд.мм.гггг`:")
+                    sendText(bot, user.id, "Принято: от $min до $max лет.\nВведи даты в формате 01.01.2027-01.14.2027:")
 
                 } catch (e: Exception) {
-                    sendText(bot, user.id, "⚠️ Ошибка! Введи возраст числом (например, `25`) или диапазоном (например, `20-30`):")
+                    sendText(bot, user.id, "⚠️ Ошибка! Введи возраст числом (например, 25) или диапазоном (например, 20-30):")
                 }
             }
 
@@ -304,7 +327,7 @@ class UpdateHandler(
                             ⚠️ *Неверный формат или период!*
                             
                             Проверьте:
-                            1. Формат: `дд.мм.гггг-дд.мм.гггг`
+                            1. Формат: 01.01.2027-01.14.2027
                             2. Поездка не должна быть в прошлом.
                             3. Планировать можно максимум на *1 год вперед*.
                             4. Длительность поездки - не более *3 месяцев*.
@@ -383,7 +406,7 @@ class UpdateHandler(
                     bot.execute(SendMessage(user.id.toString(), "🔍 Город не найден. Попробуй ввести название иначе:"))
                 } else {
                     // Создаем кнопки для выбора конкретного города из результатов поиска
-                    val buttons = cities.take(8).map { city ->
+                    val buttons = cities.take(12).map { city ->
                         val label = tripService.getFormattedDestinationForSearch(city, null, user.languageCode)
                         listOf(InlineKeyboardButton(label).apply { callbackData = "SET_HOME_CITY_${city.id}" })
                     }
@@ -424,7 +447,7 @@ class UpdateHandler(
                     val errorMsg = """
                         ⚠️ *Ошибка валидации дат!*
                         
-                        1. Формат строго: `дд.мм.гггг-дд.мм.гггг`
+                        1. Формат строго: 01.01.2027-01.14.2027
                         2. Дата начала не может быть раньше $today
                         3. Дата окончания не может быть раньше даты начала.
                         4. Планировать можно максимум на *1 год вперед*.
@@ -667,8 +690,8 @@ class UpdateHandler(
             data == "SEARCH_REPEAT_LAST" -> {
                 if (user.searchCityId == null && user.searchCountryId == null) {
                     val buttons = listOf(listOf(
-                        InlineKeyboardButton("🆕 Новый").apply { callbackData = "SEARCH_START_NEW" },
-                        InlineKeyboardButton("🔄 Повторить").apply { callbackData = "SEARCH_REPEAT_LAST" }
+                        InlineKeyboardButton("🆕 Новый поиск").apply { callbackData = "SEARCH_START_NEW" },
+                        InlineKeyboardButton("🔄 Повторить прошлый").apply { callbackData = "SEARCH_REPEAT_LAST" }
                     ))
                     bot.execute(SendMessage(user.id.toString(), "😔 История поисков пуста.").apply {
                         replyMarkup = InlineKeyboardMarkup(buttons)
