@@ -51,20 +51,21 @@ interface TripRepository : JpaRepository<Trip, Long> {
 
     // Поиск совпадений для конкретной поездки
     @Query("""
-            SELECT t FROM Trip t 
-            WHERE t.user.id != :currentUserId
-            AND t.id > :lastSeenId
-            AND (
-                (:cityId IS NOT NULL AND t.city.id = :cityId) 
-                OR 
-                (:countryId IS NOT NULL AND (t.country.id = :countryId OR t.city.country.id = :countryId))
-            )
-            AND t.user.isActive = true
-            AND (:gender = 'ALL' OR t.user.gender = :gender)
-            AND t.user.age BETWEEN :minAge AND :maxAge
-            AND t.travelStart <= :searchEnd 
-            AND t.travelEnd >= :searchStart
-        """)
+    SELECT t FROM Trip t 
+    LEFT JOIN t.city c
+    WHERE t.user.id != :currentUserId
+    AND t.id > :lastSeenId
+    AND (
+        (:cityId IS NOT NULL AND (c.id = :cityId OR (t.country.id = :countryId AND c IS NULL)))
+        OR 
+        (:cityId IS NULL AND (t.country.id = :countryId OR c.country.id = :countryId))
+    )
+    AND t.user.isActive = true
+    AND (:gender = 'ALL' OR t.user.gender = :gender)
+    AND t.user.age >= :minAge AND t.user.age <= :maxAge
+    AND t.travelStart <= :searchEnd 
+    AND t.travelEnd >= :searchStart
+""")
     fun findNewMatches(
         @Param("cityId") cityId: Long?,
         @Param("countryId") countryId: Long?,
@@ -76,4 +77,9 @@ interface TripRepository : JpaRepository<Trip, Long> {
         @Param("searchEnd") searchEnd: LocalDate,
         @Param("lastSeenId") lastSeenId: Long
     ): List<Trip>
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE Trip t SET t.notificationsEnabled = false WHERE t.user.id = :userId")
+    fun disableAllNotificationsByUserId(@Param("userId") userId: Long)
 }
