@@ -20,10 +20,11 @@ interface TripRepository : JpaRepository<Trip, Long> {
 
     @Query("""
         SELECT DISTINCT t.user FROM Trip t 
+        LEFT JOIN t.city c
         WHERE (
-            (:cityId IS NOT NULL AND t.city.id = :cityId) 
+            (:cityId IS NOT NULL AND (c.id = :cityId OR (t.country.id = :countryId AND c IS NULL)))
             OR 
-            (:countryId IS NOT NULL AND (t.country.id = :countryId OR t.city.country.id = :countryId))
+            (:cityId IS NULL AND (t.country.id = :countryId OR c.country.id = :countryId))
         )
         AND t.user.id != :currentUserId
         AND t.user.isActive = true
@@ -39,8 +40,8 @@ interface TripRepository : JpaRepository<Trip, Long> {
         @Param("gender") gender: String,
         @Param("minAge") minAge: Int,
         @Param("maxAge") maxAge: Int,
-        @Param("searchStart") searchStart: java.time.LocalDate,
-        @Param("searchEnd") searchEnd: java.time.LocalDate
+        @Param("searchStart") searchStart: LocalDate,
+        @Param("searchEnd") searchEnd: LocalDate
     ): List<User>
 
     @Query("SELECT MAX(t.id) FROM Trip t")
