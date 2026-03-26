@@ -313,7 +313,7 @@ class UpdateHandler(
                     user.state = "SEARCH_WAITING_DATES"
                     userRepository.save(user)
 
-                    sendText(bot, user.id, "Принято: от $min до $max лет.\nВведи даты в формате 01.01.2027-01.14.2027:")
+                    sendText(bot, user.id, "Принято: от $min до $max лет.\nВведи даты в формате 01.01.2027-01.12.2027:")
 
                 } catch (e: Exception) {
                     sendText(bot, user.id, "⚠️ Ошибка! Введи возраст числом (например, 25) или диапазоном (например, 20-30):")
@@ -327,7 +327,7 @@ class UpdateHandler(
                             ⚠️ *Неверный формат или период!*
                             
                             Проверьте:
-                            1. Формат: 01.01.2027-01.14.2027
+                            1. Формат: 01.01.2027-01.12.2027
                             2. Поездка не должна быть в прошлом.
                             3. Планировать можно максимум на *1 год вперед*.
                             4. Длительность поездки - не более *3 месяцев*.
@@ -447,7 +447,7 @@ class UpdateHandler(
                     val errorMsg = """
                         ⚠️ *Ошибка валидации дат!*
                         
-                        1. Формат строго: 01.01.2027-01.14.2027
+                        1. Формат строго: 01.01.2027-01.12.2027
                         2. Дата начала не может быть раньше $today
                         3. Дата окончания не может быть раньше даты начала.
                         4. Планировать можно максимум на *1 год вперед*.
@@ -923,7 +923,7 @@ class UpdateHandler(
                 user.tempCityId = cityId
                 user.state = "WAITING_FOR_DATE"
                 userRepository.save(user)
-                sendText(bot, user.id, "Отлично! Введи дату поездки  в формате: 01.01.2027-01.14.2027")
+                sendText(bot, user.id, "Отлично! Введи дату поездки  в формате: 01.01.2027-01.12.2027")
             }
 
             data.startsWith("SELECT_COUNTRY_") -> {
@@ -931,7 +931,7 @@ class UpdateHandler(
                 user.tempCountryId = countryId
                 user.state = "WAITING_FOR_DATE"
                 userRepository.save(user)
-                sendText(bot, user.id, "Записал страну! Введи дату поездки  в формате: 01.01.2027-01.14.2027")
+                sendText(bot, user.id, "Записал страну! Введи дату поездки  в формате: 01.01.2027-01.12.2027")
             }
 
             data == "EDIT_BIO" -> {
